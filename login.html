@@ -1,0 +1,1661 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ASTRX</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Victor+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  
+  <!-- Official Google reCAPTCHA API -->
+  <script src="https://www.google.com/recaptcha/api.js" async defer></script>
+  
+  <style>
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: #18181a;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 30px 16px;
+      font-family: 'Victor Mono', monospace;
+      color: rgba(226, 226, 226, 0.75);
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      user-select: none;
+      position: relative;
+      overflow-x: hidden;
+    }
+
+    /* Interactive Antigravity Canvas Background */
+    #gravity-canvas {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      z-index: 1;
+      pointer-events: none;
+    }
+
+    .main-container {
+      width: 100%;
+      max-width: 480px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      position: relative;
+      z-index: 10;
+      transition: opacity 0.7s cubic-bezier(0.16, 1, 0.3, 1), transform 0.7s cubic-bezier(0.16, 1, 0.3, 1), filter 0.7s ease;
+    }
+
+    .main-container.dissolved {
+      opacity: 0;
+      transform: scale(0.92) translateY(-14px);
+      filter: blur(12px);
+      pointer-events: none;
+    }
+
+    /* Logo ASTRX */
+    .brand-title {
+      font-family: 'Instrument Serif', Georgia, serif;
+      font-size: clamp(60px, 9vw, 84px);
+      font-weight: 400;
+      line-height: 1;
+      letter-spacing: 6px;
+      background: linear-gradient(90deg, #393939 -23.75%, #EBEBEB 46.09%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 26px;
+      text-align: center;
+      cursor: pointer;
+      text-shadow: 0 0 30px rgba(255, 255, 255, 0.1);
+    }
+
+    /* Concentric & Symmetrical Card Box - Restored Glassmorphism */
+    .auth-card {
+      width: 100%;
+      border-radius: 50px;
+      background: rgba(134, 134, 134, 0.20);
+      backdrop-filter: blur(25px);
+      -webkit-backdrop-filter: blur(25px);
+      border: none;
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      box-shadow: none;
+      transition: height 0.3s cubic-bezier(0.25, 1, 0.5, 1);
+    }
+
+    /* Concentric Tab Switcher */
+    .tab-bar {
+      width: 100%;
+      height: 46px;
+      border-radius: 23px;
+      background: rgba(255, 255, 255, 0.08);
+      display: flex;
+      align-items: center;
+      position: relative;
+      padding: 4px;
+      margin-bottom: 20px;
+    }
+
+    .tab-pill {
+      position: absolute;
+      top: 4px;
+      left: 4px;
+      width: calc(50% - 4px);
+      height: 38px;
+      border-radius: 19px;
+      background: rgba(255, 255, 255, 0.08);
+      transition: transform 0.32s cubic-bezier(0.25, 1, 0.5, 1);
+      pointer-events: none;
+    }
+
+    .tab-item {
+      flex: 1;
+      height: 100%;
+      border: none;
+      background: transparent;
+      outline: none;
+      cursor: pointer;
+      font-family: 'Victor Mono', monospace;
+      font-size: 17px;
+      font-weight: 400;
+      letter-spacing: 0.8px;
+      color: rgba(226, 226, 226, 0.75);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      z-index: 2;
+      transition: opacity 0.25s ease, color 0.25s ease;
+    }
+
+    .tab-item:hover {
+      opacity: 0.95;
+      color: rgba(255, 255, 255, 0.9);
+    }
+
+    /* Screen Views */
+    .screen-view {
+      width: 100%;
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      opacity: 0;
+      transform: translateY(4px);
+      transition: opacity 0.25s cubic-bezier(0.25, 1, 0.5, 1), transform 0.25s cubic-bezier(0.25, 1, 0.5, 1);
+    }
+
+    .screen-view.active {
+      display: flex;
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    .screen-heading {
+      font-family: 'Victor Mono', monospace;
+      font-size: 18px;
+      font-weight: 400;
+      letter-spacing: 1px;
+      color: rgba(226, 226, 226, 0.75);
+      text-align: center;
+      margin-bottom: 20px;
+      line-height: 1.2;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .buttons-group {
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+    }
+
+    /* Action Buttons */
+    .action-btn {
+      width: 100%;
+      height: 52px;
+      border-radius: 26px;
+      border: none;
+      outline: none;
+      font-family: 'Victor Mono', monospace;
+      font-size: 17px;
+      font-weight: 400;
+      letter-spacing: 0.9px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      cursor: pointer;
+      text-decoration: none;
+      background: rgba(255, 255, 255, 0.08);
+      color: rgba(226, 226, 226, 0.75);
+      padding: 0 46px;
+      transition: background 0.28s cubic-bezier(0.25, 1, 0.5, 1), 
+                  color 0.28s cubic-bezier(0.25, 1, 0.5, 1), 
+                  transform 0.2s cubic-bezier(0.25, 1, 0.5, 1),
+                  opacity 0.2s ease;
+    }
+
+    .action-btn .btn-icon {
+      position: absolute;
+      left: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      pointer-events: none;
+    }
+
+    /* .default-active is always white by default */
+    .action-btn.default-active {
+      background: linear-gradient(0deg, rgba(226, 226, 226, 0.75) 0%, rgba(226, 226, 226, 0.75) 100%);
+      color: rgba(71, 71, 71, 0.85);
+    }
+
+    /* If user hovers over another action button, switch highlight */
+    .buttons-group:has(.action-btn:not(.default-active):hover) .action-btn.default-active {
+      background: rgba(255, 255, 255, 0.08);
+      color: rgba(226, 226, 226, 0.75);
+    }
+
+    /* Dynamic Hover: Whichever button is hovered turns white with dark text */
+    .action-btn:hover:not(:disabled) {
+      background: linear-gradient(0deg, rgba(226, 226, 226, 0.75) 0%, rgba(226, 226, 226, 0.75) 100%) !important;
+      color: rgba(71, 71, 71, 0.85) !important;
+      transform: translateY(-1px);
+    }
+
+    .action-btn:active:not(:disabled) {
+      transform: scale(0.985);
+    }
+
+    .action-btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    /* Input Box */
+    .input-wrapper {
+      position: relative;
+      width: 100%;
+      display: flex;
+      align-items: center;
+    }
+
+    .input-wrapper .input-icon {
+      position: absolute;
+      left: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: rgba(160, 160, 160, 0.5);
+      pointer-events: none;
+    }
+
+    .input-toggle-pwd {
+      position: absolute;
+      right: 16px;
+      background: transparent;
+      border: none;
+      color: rgba(160, 160, 160, 0.6);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 6px;
+      outline: none;
+      border-radius: 50%;
+      transition: color 0.2s ease, background 0.2s ease;
+    }
+
+    .input-toggle-pwd:hover {
+      color: rgba(255, 255, 255, 0.95);
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    .action-input {
+      width: 100%;
+      height: 52px;
+      border-radius: 26px;
+      border: none;
+      outline: none;
+      font-family: 'Victor Mono', monospace;
+      font-size: 15px;
+      font-weight: 400;
+      letter-spacing: 0.9px;
+      background: rgba(255, 255, 255, 0.08);
+      color: rgba(226, 226, 226, 0.9);
+      padding: 0 50px 0 54px;
+      text-align: left;
+      transition: background 0.25s ease, box-shadow 0.25s ease;
+    }
+
+    .action-input.no-toggle {
+      padding-right: 24px;
+    }
+
+    .action-input::placeholder {
+      color: rgba(160, 160, 160, 0.35);
+      font-family: 'Victor Mono', monospace;
+      font-size: 15px;
+      letter-spacing: 0.9px;
+    }
+
+    .action-input:focus {
+      background: rgba(255, 255, 255, 0.12);
+      box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.18);
+    }
+
+    /* Google reCAPTCHA Center Placement */
+    .recaptcha-center-wrap {
+      width: 100%;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      overflow: hidden;
+    }
+
+    /* Policy & Terms Concise Disclaimer */
+    .policy-agreement-text {
+      font-size: 11px;
+      line-height: 1.4;
+      letter-spacing: 0.5px;
+      color: rgba(160, 160, 160, 0.65);
+      text-align: center;
+      padding: 0 4px;
+      margin: 2px 0;
+    }
+
+    .policy-agreement-text a {
+      color: rgba(226, 226, 226, 0.9);
+      text-decoration: underline;
+      text-underline-offset: 2px;
+      cursor: pointer;
+      transition: color 0.2s ease;
+    }
+
+    .policy-agreement-text a:hover {
+      color: #ffffff;
+    }
+
+    /* Final Stage: Enter Floating Bottom Pill */
+    .enter-stage {
+      position: fixed;
+      bottom: 38px;
+      left: 50%;
+      transform: translateX(-50%) translateY(14px);
+      z-index: 30;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.6s cubic-bezier(0.16, 1, 0.3, 1), transform 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+
+    .enter-stage.visible {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+      pointer-events: auto;
+    }
+
+    .enter-astrx-btn {
+      height: 40px;
+      padding: 0 22px;
+      border-radius: 20px;
+      border: none;
+      outline: none;
+      font-family: 'Victor Mono', monospace;
+      font-size: 14px;
+      font-weight: 500;
+      letter-spacing: 0.8px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      cursor: pointer;
+      text-decoration: none;
+      background: rgba(226, 226, 226, 0.88);
+      color: #1a1a1a;
+      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+      transition: background 0.25s cubic-bezier(0.25, 1, 0.5, 1),
+                  color 0.25s cubic-bezier(0.25, 1, 0.5, 1),
+                  transform 0.2s cubic-bezier(0.25, 1, 0.5, 1),
+                  box-shadow 0.2s ease;
+    }
+
+    .enter-astrx-btn:hover {
+      background: #FFFFFF;
+      color: #000000;
+      transform: translateY(-2px);
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+    }
+
+    .enter-astrx-btn:active {
+      transform: translateY(0px) scale(0.98);
+    }
+
+    /* Transition Overlay for Seamless AI Platform Handoff */
+    .transition-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      background-color: #18181a;
+      z-index: 50;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.85s cubic-bezier(0.22, 1, 0.36, 1);
+    }
+
+    .transition-overlay.active {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    /* Enhanced Mobile Phone Optimization */
+    @media (max-width: 480px) {
+      body {
+        padding: max(env(safe-area-inset-top), 10px) 10px max(env(safe-area-inset-bottom), 10px) 10px;
+      }
+
+      .main-container {
+        width: 100%;
+        max-width: min(292px, 86vw);
+      }
+
+      .brand-title {
+        font-size: clamp(52px, 15vw, 64px);
+        letter-spacing: 4px;
+        margin-top: -14px;
+        margin-bottom: 22px;
+      }
+
+      .auth-card {
+        border-radius: 26px;
+        padding: 12px 11px;
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
+      }
+
+      .tab-bar {
+        height: 32px;
+        border-radius: 16px;
+        margin-bottom: 10px;
+        padding: 2.5px;
+      }
+
+      .tab-pill {
+        height: 27px;
+        border-radius: 13.5px;
+        top: 2.5px;
+        left: 2.5px;
+        width: calc(50% - 2.5px);
+      }
+
+      .tab-item {
+        font-size: 12px;
+        letter-spacing: 0.4px;
+      }
+
+      .screen-heading {
+        font-size: 12px;
+        letter-spacing: 0.4px;
+        margin-bottom: 10px;
+      }
+
+      .buttons-group {
+        gap: 7px !important;
+      }
+
+      .action-btn {
+        height: 36px;
+        border-radius: 18px;
+        font-size: 11.5px;
+        letter-spacing: 0.2px;
+        padding: 0 28px;
+      }
+
+      .action-btn .btn-icon {
+        left: 10px;
+      }
+
+      .action-btn .btn-icon svg {
+        width: 14px;
+        height: 14px;
+      }
+
+      .action-input {
+        height: 36px;
+        border-radius: 18px;
+        font-size: 11px;
+        letter-spacing: 0.3px;
+        padding: 0 30px 0 30px;
+      }
+
+      .action-input::placeholder {
+        font-size: 11px;
+      }
+
+      .input-wrapper .input-icon {
+        left: 10px;
+      }
+
+      .input-wrapper .input-icon svg {
+        width: 13px;
+        height: 13px;
+      }
+
+      .input-toggle-pwd {
+        right: 6px;
+        padding: 3px;
+      }
+
+      .input-toggle-pwd svg {
+        width: 13px;
+        height: 13px;
+      }
+
+      .recaptcha-center-wrap {
+        transform: scale(0.80);
+        transform-origin: center;
+        margin: -10px 0;
+      }
+
+      .policy-agreement-text {
+        font-size: 8.5px;
+        line-height: 1.3;
+        letter-spacing: 0.1px;
+        margin: 1px 0;
+      }
+
+      .enter-stage {
+        bottom: max(env(safe-area-inset-bottom, 0px), 16px);
+      }
+
+      .enter-astrx-btn {
+        height: 36px;
+        padding: 0 16px;
+        font-size: 11.5px;
+        border-radius: 18px;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Transition Overlay for Seamless Page Handoff -->
+  <div class="transition-overlay" id="transitionOverlay"></div>
+
+  <!-- Interactive Antigravity Canvas -->
+  <canvas id="gravity-canvas"></canvas>
+
+  <div class="main-container" id="mainContainer">
+    <!-- Brand Title -->
+    <h1 class="brand-title" onclick="resetToStart()">ASTRX</h1>
+
+    <!-- Concentric Symmetrical Card Container -->
+    <div class="auth-card">
+      
+      <!-- Top Tab Switcher -->
+      <div class="tab-bar" id="mainTabBar">
+        <div class="tab-pill" id="tabPill"></div>
+        <button class="tab-item" id="tab-login" onclick="setTab('login')">login</button>
+        <button class="tab-item" id="tab-signup" onclick="setTab('signup')">sign-up</button>
+      </div>
+
+      <!-- ============================================== -->
+      <!-- 1. SIGN UP FLOW -->
+      <!-- ============================================== -->
+
+      <!-- 1.1 SIGN UP: MAIN OPTIONS SCREEN -->
+      <div class="screen-view active" id="view-signup-main">
+        <div class="screen-heading">Create your account</div>
+        <div class="buttons-group">
+          <!-- Default active white on signup -->
+          <button class="action-btn default-active" onclick="showScreen('view-signup-email')">
+            <span class="btn-icon">
+              <!-- Mail Icon -->
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect width="20" height="16" x="2" y="4" rx="3"/>
+                <path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/>
+              </svg>
+            </span>
+            <span>sign up with email</span>
+          </button>
+          
+          <button class="action-btn" onclick="socialAuth('Google')">
+            <span class="btn-icon">
+              <!-- Google Icon -->
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M12.48 10.92v3.28h7.84c-.24 1.84-.853 3.187-1.787 4.133-1.147 1.147-2.933 2.4-6.053 2.4-4.827 0-8.6-3.893-8.6-8.72s3.773-8.72 8.6-8.72c2.6 0 4.507 1.027 5.907 2.347l2.307-2.307C18.747 1.44 16.133 0 12.48 0 5.867 0 .307 5.387.307 12s5.56 12 12.173 12c3.573 0 6.267-1.173 8.373-3.36 2.16-2.16 2.84-5.213 2.84-7.667 0-.76-.053-1.467-.173-2.053H12.48z"/>
+              </svg>
+            </span>
+            <span>sign up with Google</span>
+          </button>
+
+          <button class="action-btn" onclick="socialAuth('GitHub')">
+            <span class="btn-icon">
+              <!-- GitHub Icon -->
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
+              </svg>
+            </span>
+            <span>sign up with GitHub</span>
+          </button>
+
+          <button class="action-btn" onclick="socialAuth('Apple')">
+            <span class="btn-icon">
+              <!-- Apple Icon -->
+              <svg width="16" height="18" viewBox="0 0 384 512" fill="currentColor">
+                <path d="M318.7 268.7c-.2-36.7 16.4-64.4 50-84.8-18.8-26.9-47.2-41.7-84.7-44.6-35.5-2.8-74.3 20.7-88.5 20.7-15 0-49.4-19.7-76.4-19.7C63.3 141.2 4 184.8 4 273.5q0 39.3 14.4 81.2c12.8 36.7 59 126.7 107.2 125.2 25.2-.6 43-17.9 75.8-17.9 31.8 0 48.3 17.9 76.4 17.9 48.6-.7 90.4-82.5 102.6-119.3-65.2-30.7-61.7-90-61.7-91.9zm-56.6-164.2c27.3-32.4 24.8-61.9 24-72.5-24.1 1.4-52 16.4-67.9 34.9-17.5 19.8-27.8 44.3-25.6 71.9 26.1 2 49.9-11.4 69.5-34.3z"/>
+              </svg>
+            </span>
+            <span>sign up with Apple</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- 1.2 SIGN UP: EMAIL STEP -->
+      <div class="screen-view" id="view-signup-email">
+        <div class="screen-heading">sign up with email</div>
+        <form class="buttons-group" onsubmit="handleSignupEmailSubmit(event)" style="gap: 18px;">
+          <div class="input-wrapper">
+            <span class="input-icon">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect width="20" height="16" x="2" y="4" rx="3"/>
+                <path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/>
+              </svg>
+            </span>
+            <input type="email" required placeholder="your email" class="action-input no-toggle" id="signup-email-input" autocomplete="email" />
+          </div>
+          <!-- Primary button is light by default -->
+          <button type="submit" class="action-btn default-active">
+            <span>Continue</span>
+          </button>
+          <button type="button" class="action-btn" onclick="showScreen('view-signup-main')">
+            <span>Go back</span>
+          </button>
+        </form>
+      </div>
+
+      <!-- 1.3 SIGN UP: REAL GOOGLE RECAPTCHA STEP -->
+      <div class="screen-view" id="view-signup-captcha">
+        <div class="screen-heading">security verification</div>
+        <div class="buttons-group" style="gap: 18px;">
+          
+          <div class="recaptcha-center-wrap">
+            <div class="g-recaptcha" data-sitekey="6LckR8stAAAAAEWcV6X2Bb3pKlWNMxRTCg4M-cav" data-theme="dark" data-callback="onSignupRecaptchaSuccess"></div>
+          </div>
+
+          <button type="button" class="action-btn default-active" id="signup-captcha-continue-btn" disabled onclick="showScreen('view-signup-username')">
+            <span>Continue</span>
+          </button>
+          
+          <button type="button" class="action-btn" onclick="showScreen('view-signup-email')">
+            <span>Go back</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- 1.4 SIGN UP: CHOOSE USERNAME STEP -->
+      <div class="screen-view" id="view-signup-username">
+        <div class="screen-heading">choose your username</div>
+        <form class="buttons-group" onsubmit="handleSignupUsernameSubmit(event)" style="gap: 18px;">
+          <div class="input-wrapper">
+            <span class="input-icon">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="8" r="5"/>
+                <path d="M20 21a8 8 0 0 0-16 0"/>
+              </svg>
+            </span>
+            <input type="text" required placeholder="type your username" minlength="2" maxlength="30" class="action-input no-toggle" id="signup-username-input" autocomplete="username" />
+          </div>
+          <!-- Primary button is light by default -->
+          <button type="submit" class="action-btn default-active">
+            <span>Continue</span>
+          </button>
+          <button type="button" class="action-btn" onclick="showScreen('view-signup-captcha')">
+            <span>Go back</span>
+          </button>
+        </form>
+      </div>
+
+      <!-- 1.5 SIGN UP: CREATE PASSWORD & ACCEPT POLICIES -->
+      <div class="screen-view" id="view-signup-password">
+        <div class="screen-heading">create password</div>
+        <form class="buttons-group" onsubmit="handleSignupPasswordSubmit(event)" style="gap: 16px;">
+          
+          <div class="input-wrapper">
+            <span class="input-icon">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect width="18" height="11" x="3" y="11" rx="2" ry="2"/>
+                <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+              </svg>
+            </span>
+            <input type="password" required placeholder="create password (min 6 chars)" minlength="6" class="action-input" id="signup-pwd-input" autocomplete="new-password" />
+            <button type="button" class="input-toggle-pwd" 
+                    onmouseenter="peekPassword('signup-pwd-input', true, this)" 
+                    onmouseleave="peekPassword('signup-pwd-input', false, this)" 
+                    onclick="togglePasswordVisibility('signup-pwd-input', this)">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/>
+                <circle cx="12" cy="12" r="3"/>
+              </svg>
+            </button>
+          </div>
+
+          <div class="input-wrapper">
+            <span class="input-icon">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect width="18" height="11" x="3" y="11" rx="2" ry="2"/>
+                <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+              </svg>
+            </span>
+            <input type="password" required placeholder="confirm password" minlength="6" class="action-input" id="signup-pwd-confirm" autocomplete="new-password" />
+            <button type="button" class="input-toggle-pwd" 
+                    onmouseenter="peekPassword('signup-pwd-confirm', true, this)" 
+                    onmouseleave="peekPassword('signup-pwd-confirm', false, this)" 
+                    onclick="togglePasswordVisibility('signup-pwd-confirm', this)">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/>
+                <circle cx="12" cy="12" r="3"/>
+              </svg>
+            </button>
+          </div>
+
+          <!-- Full Formal Legal Hyperlinks -->
+          <div class="policy-agreement-text">
+            By continuing, you agree to our <a href="#privacy" target="_blank">Privacy Policy</a>, <a href="#terms" target="_blank">Terms and Conditions</a>, and <a href="#cookies" target="_blank">Cookie Policy</a>.
+          </div>
+
+          <!-- Primary button is light by default -->
+          <button type="submit" class="action-btn default-active" style="margin-top: 4px;">
+            <span>Accept & Create Account</span>
+          </button>
+          
+          <button type="button" class="action-btn" onclick="showScreen('view-signup-username')">
+            <span>Go back</span>
+          </button>
+        </form>
+      </div>
+
+      <!-- ============================================== -->
+      <!-- 2. LOGIN FLOW -->
+      <!-- ============================================== -->
+
+      <!-- 2.1 LOGIN: MAIN OPTIONS SCREEN -->
+      <div class="screen-view" id="view-login-main">
+        <div class="screen-heading">Login to your account</div>
+        <div class="buttons-group">
+          <button class="action-btn" onclick="showScreen('view-login-email')">
+            <span class="btn-icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect width="20" height="16" x="2" y="4" rx="3"/>
+                <path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/>
+              </svg>
+            </span>
+            <span>login using email</span>
+          </button>
+
+          <button class="action-btn" onclick="socialAuth('Google')">
+            <span class="btn-icon">
+              <!-- Google Icon -->
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M12.48 10.92v3.28h7.84c-.24 1.84-.853 3.187-1.787 4.133-1.147 1.147-2.933 2.4-6.053 2.4-4.827 0-8.6-3.893-8.6-8.72s3.773-8.72 8.6-8.72c2.6 0 4.507 1.027 5.907 2.347l2.307-2.307C18.747 1.44 16.133 0 12.48 0 5.867 0 .307 5.387.307 12s5.56 12 12.173 12c3.573 0 6.267-1.173 8.373-3.36 2.16-2.16 2.84-5.213 2.84-7.667 0-.76-.053-1.467-.173-2.053H12.48z"/>
+              </svg>
+            </span>
+            <span>login using Google</span>
+          </button>
+
+          <button class="action-btn" onclick="socialAuth('GitHub')">
+            <span class="btn-icon">
+              <!-- GitHub Icon -->
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
+              </svg>
+            </span>
+            <span>login using GitHub</span>
+          </button>
+
+          <button class="action-btn" onclick="socialAuth('Apple')">
+            <span class="btn-icon">
+              <!-- Apple Icon -->
+              <svg width="16" height="18" viewBox="0 0 384 512" fill="currentColor">
+                <path d="M318.7 268.7c-.2-36.7 16.4-64.4 50-84.8-18.8-26.9-47.2-41.7-84.7-44.6-35.5-2.8-74.3 20.7-88.5 20.7-15 0-49.4-19.7-76.4-19.7C63.3 141.2 4 184.8 4 273.5q0 39.3 14.4 81.2c12.8 36.7 59 126.7 107.2 125.2 25.2-.6 43-17.9 75.8-17.9 31.8 0 48.3 17.9 76.4 17.9 48.6-.7 90.4-82.5 102.6-119.3-65.2-30.7-61.7-90-61.7-91.9zm-56.6-164.2c27.3-32.4 24.8-61.9 24-72.5-24.1 1.4-52 16.4-67.9 34.9-17.5 19.8-27.8 44.3-25.6 71.9 26.1 2 49.9-11.4 69.5-34.3z"/>
+              </svg>
+            </span>
+            <span>login using Apple</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- 2.2 LOGIN: EMAIL STEP -->
+      <div class="screen-view" id="view-login-email">
+        <div class="screen-heading">login using email</div>
+        <form class="buttons-group" onsubmit="handleLoginEmailSubmit(event)" style="gap: 18px;">
+          <div class="input-wrapper">
+            <span class="input-icon">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect width="20" height="16" x="2" y="4" rx="3"/>
+                <path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/>
+              </svg>
+            </span>
+            <input type="email" required placeholder="your email" class="action-input no-toggle" id="login-email-input" autocomplete="email" />
+          </div>
+          <!-- Primary button is light by default -->
+          <button type="submit" class="action-btn default-active">
+            <span>Continue</span>
+          </button>
+          <button type="button" class="action-btn" onclick="showScreen('view-login-main')">
+            <span>Go back</span>
+          </button>
+        </form>
+      </div>
+
+      <!-- 2.3 LOGIN: REAL GOOGLE RECAPTCHA STEP -->
+      <div class="screen-view" id="view-login-captcha">
+        <div class="screen-heading">security verification</div>
+        <div class="buttons-group" style="gap: 18px;">
+          
+          <div class="recaptcha-center-wrap">
+            <div class="g-recaptcha" data-sitekey="6LckR8stAAAAAEWcV6X2Bb3pKlWNMxRTCg4M-cav" data-theme="dark" data-callback="onLoginRecaptchaSuccess"></div>
+          </div>
+
+          <button type="button" class="action-btn default-active" id="login-captcha-continue-btn" disabled onclick="showScreen('view-login-password')">
+            <span>Continue</span>
+          </button>
+          
+          <button type="button" class="action-btn" onclick="showScreen('view-login-email')">
+            <span>Go back</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- 2.4 LOGIN: ENTER PASSWORD -->
+      <div class="screen-view" id="view-login-password">
+        <div class="screen-heading">enter password</div>
+        <form class="buttons-group" onsubmit="handleLoginPasswordSubmit(event)" style="gap: 16px;">
+          
+          <div class="input-wrapper">
+            <span class="input-icon">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect width="18" height="11" x="3" y="11" rx="2" ry="2"/>
+                <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+              </svg>
+            </span>
+            <input type="password" required placeholder="enter your password" class="action-input" id="login-pwd-input" autocomplete="current-password" />
+            <button type="button" class="input-toggle-pwd" 
+                    onmouseenter="peekPassword('login-pwd-input', true, this)" 
+                    onmouseleave="peekPassword('login-pwd-input', false, this)" 
+                    onclick="togglePasswordVisibility('login-pwd-input', this)">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/>
+                <circle cx="12" cy="12" r="3"/>
+              </svg>
+            </button>
+          </div>
+
+          <!-- Primary button is light by default -->
+          <button type="submit" class="action-btn default-active">
+            <span>Login to ASTRX</span>
+          </button>
+          
+          <button type="button" class="action-btn" onclick="showScreen('view-login-captcha')">
+            <span>Go back</span>
+          </button>
+        </form>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Final Stage: Enter Floating Bottom Pill -->
+  <div class="enter-stage" id="enterStage">
+    <button type="button" class="enter-astrx-btn" onclick="handleEnterAstrx()">
+      <span>enter</span>
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+    </button>
+  </div>
+
+  <script>
+    // State management
+    let activeTab = 'signup';
+    let userEmail = '';
+    let userUsername = '';
+    let isFinalLockedState = false;
+    let authLockStartTime = 0;
+    let isCondensingToLogo = false;
+    let condenseStartTime = 0;
+
+    /* Google reCAPTCHA Verification Callbacks */
+    function onSignupRecaptchaSuccess(token) {
+      const btn = document.getElementById('signup-captcha-continue-btn');
+      if (btn) {
+        btn.disabled = false;
+        setTimeout(() => {
+          showScreen('view-signup-username');
+        }, 500);
+      }
+    }
+
+    function onLoginRecaptchaSuccess(token) {
+      const btn = document.getElementById('login-captcha-continue-btn');
+      if (btn) {
+        btn.disabled = false;
+        setTimeout(() => {
+          showScreen('view-login-password');
+        }, 500);
+      }
+    }
+
+    function setTab(tab) {
+      activeTab = tab;
+      const pill = document.getElementById('tabPill');
+      if (tab === 'login') {
+        pill.style.transform = 'translateX(0%)';
+        showScreen('view-login-main');
+      } else {
+        pill.style.transform = 'translateX(100%)';
+        showScreen('view-signup-main');
+      }
+    }
+
+    function showScreen(viewId) {
+      document.querySelectorAll('.screen-view').forEach(view => {
+        view.classList.remove('active');
+      });
+      const target = document.getElementById(viewId);
+      if (target) {
+        target.classList.add('active');
+      }
+    }
+
+    // Step 1: Sign Up Email submission
+    function handleSignupEmailSubmit(e) {
+      e.preventDefault();
+      const email = document.getElementById('signup-email-input').value.trim();
+      if (!email) return;
+      userEmail = email;
+      showScreen('view-signup-captcha');
+    }
+
+    // Step 1: Login Email submission
+    function handleLoginEmailSubmit(e) {
+      e.preventDefault();
+      const email = document.getElementById('login-email-input').value.trim();
+      if (!email) return;
+      userEmail = email;
+      showScreen('view-login-captcha');
+    }
+
+    // Step 2: Sign Up Username submission
+    function handleSignupUsernameSubmit(e) {
+      e.preventDefault();
+      const username = document.getElementById('signup-username-input').value.trim();
+      if (!username) return;
+      userUsername = username;
+      showScreen('view-signup-password');
+    }
+
+    // Step 3: Sign Up Password + Acceptance -> Direct Automatic Entry
+    function handleSignupPasswordSubmit(e) {
+      e.preventDefault();
+      const pwdInput = document.getElementById('signup-pwd-input');
+      const confirmInput = document.getElementById('signup-pwd-confirm');
+
+      if (pwdInput.value !== confirmInput.value) {
+        alert('Passwords do not match. Please re-enter.');
+        return;
+      }
+
+      // Securely wipe raw password values from DOM memory
+      pwdInput.value = '';
+      confirmInput.value = '';
+
+      const finalUsername = userUsername || (userEmail ? userEmail.split('@')[0] : 'Astrx User');
+      const userObj = {
+        username: finalUsername,
+        email: userEmail || 'user@astrxai.com',
+        queryLimit: 50,
+        queriesUsed: 0,
+        createdAt: new Date().toISOString()
+      };
+      try {
+        localStorage.setItem('astrx_user', JSON.stringify(userObj));
+      } catch(e) {}
+
+      // Automatically enters / transforms into the workspace
+      enterApplication(userEmail || 'user@astrxai.com');
+    }
+
+    // Step 3: Login Password submission -> Direct Automatic Entry
+    function handleLoginPasswordSubmit(e) {
+      e.preventDefault();
+      const pwdInput = document.getElementById('login-pwd-input');
+      pwdInput.value = '';
+
+      let existingUser = null;
+      try {
+        existingUser = JSON.parse(localStorage.getItem('astrx_user') || 'null');
+      } catch(err) {}
+
+      const userObj = {
+        username: (existingUser && existingUser.username) ? existingUser.username : (userEmail ? userEmail.split('@')[0] : 'Astrx User'),
+        email: userEmail || (existingUser && existingUser.email) || 'user@astrxai.com',
+        queryLimit: (existingUser && existingUser.queryLimit) || 50,
+        queriesUsed: (existingUser && typeof existingUser.queriesUsed === 'number') ? existingUser.queriesUsed : 0,
+        createdAt: (existingUser && existingUser.createdAt) || new Date().toISOString()
+      };
+      try {
+        localStorage.setItem('astrx_user', JSON.stringify(userObj));
+      } catch(e) {}
+
+      enterApplication(userEmail || 'user@astrxai.com');
+    }
+
+    // Social SSO Authentication (Google, GitHub, Apple) -> Retrieves provider name as username
+    function socialAuth(provider) {
+      let derivedUsername = `${provider} User`;
+      if (provider === 'Google') derivedUsername = 'Google Explorer';
+      else if (provider === 'GitHub') derivedUsername = 'GitHub Dev';
+      else if (provider === 'Apple') derivedUsername = 'Apple Voyager';
+
+      const ssoUser = `${provider.toLowerCase()}.user@astrxai.com`;
+      const userObj = {
+        username: derivedUsername,
+        email: ssoUser,
+        provider: provider,
+        queryLimit: 50,
+        queriesUsed: 0,
+        createdAt: new Date().toISOString()
+      };
+      try {
+        localStorage.setItem('astrx_user', JSON.stringify(userObj));
+      } catch(e) {}
+
+      enterApplication(ssoUser);
+    }
+
+    // Application entry handler -> Dissolves auth card & smoothly forms particle logo
+    function enterApplication(email) {
+      const mainContainer = document.getElementById('mainContainer');
+      const enterStage = document.getElementById('enterStage');
+
+      if (mainContainer) {
+        mainContainer.classList.add('dissolved');
+      }
+
+      isFinalLockedState = true;
+      authLockStartTime = performance.now();
+
+      // Reveals the enter button after the logo constellation has completely and serenely formed
+      setTimeout(() => {
+        if (enterStage && !isCondensingToLogo) {
+          enterStage.classList.add('visible');
+        }
+      }, 3800);
+    }
+
+    // Synthesizes a deep, resonant, big-room cosmic reverb sound effect (No shrill frequencies)
+    function playCondensationSound() {
+      try {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if (!AudioCtx) return;
+        const ctx = new AudioCtx();
+        if (ctx.state === 'suspended') {
+          ctx.resume();
+        }
+
+        const now = ctx.currentTime;
+        const duration = 3.6;
+
+        // Master Output Stage
+        const masterGain = ctx.createGain();
+        masterGain.gain.setValueAtTime(0.42, now);
+        masterGain.gain.linearRampToValueAtTime(0.40, now + duration - 0.8);
+        masterGain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+        masterGain.connect(ctx.destination);
+
+        // Algorithmic Big-Room / Cathedral Reverb Generator
+        const reverbLength = Math.floor(ctx.sampleRate * 3.2);
+        const impulse = ctx.createBuffer(2, reverbLength, ctx.sampleRate);
+        const leftChannel = impulse.getChannelData(0);
+        const rightChannel = impulse.getChannelData(1);
+        for (let i = 0; i < reverbLength; i++) {
+          const t = i / ctx.sampleRate;
+          const decay = Math.exp(-t * 2.2);
+          leftChannel[i] = (Math.random() * 2 - 1) * decay;
+          rightChannel[i] = (Math.random() * 2 - 1) * decay;
+        }
+
+        const convolver = ctx.createConvolver();
+        convolver.buffer = impulse;
+
+        // Low-pass filter for the reverb tail (Removes high shrillness, keeps deep room warmth)
+        const reverbFilter = ctx.createBiquadFilter();
+        reverbFilter.type = 'lowpass';
+        reverbFilter.frequency.setValueAtTime(380, now);
+
+        const wetGain = ctx.createGain();
+        wetGain.gain.setValueAtTime(0.38, now);
+
+        convolver.connect(reverbFilter);
+        reverbFilter.connect(wetGain);
+        wetGain.connect(masterGain);
+
+        // Layer 1: Deep Resonant Sub-Bass Bloom (Warm, heavy foundation)
+        const subOsc = ctx.createOscillator();
+        const subGain = ctx.createGain();
+        subOsc.type = 'sine';
+        subOsc.frequency.setValueAtTime(62, now);
+        subOsc.frequency.exponentialRampToValueAtTime(43.65, now + 1.2); // Settles to deep F1/A1
+        subOsc.frequency.linearRampToValueAtTime(38, now + duration);
+
+        subGain.gain.setValueAtTime(0.001, now);
+        subGain.gain.linearRampToValueAtTime(0.45, now + 0.35);
+        subGain.gain.linearRampToValueAtTime(0.38, now + 1.6);
+        subGain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+
+        subOsc.connect(subGain);
+        subGain.connect(masterGain);
+        subGain.connect(convolver); // Sends to big room reverb
+
+        subOsc.start(now);
+        subOsc.stop(now + duration);
+
+        // Layer 2: Warm Low-End Body Drone (Cello / Organ fundamental warmth)
+        const droneOsc = ctx.createOscillator();
+        const droneFilter = ctx.createBiquadFilter();
+        const droneGain = ctx.createGain();
+
+        droneOsc.type = 'triangle';
+        droneOsc.frequency.setValueAtTime(87.3, now); // F2
+        droneOsc.frequency.exponentialRampToValueAtTime(65.4, now + 1.4); // C2
+
+        droneFilter.type = 'lowpass';
+        droneFilter.frequency.setValueAtTime(180, now);
+        droneFilter.frequency.linearRampToValueAtTime(260, now + 1.0);
+        droneFilter.frequency.linearRampToValueAtTime(140, now + duration);
+
+        droneGain.gain.setValueAtTime(0.001, now);
+        droneGain.gain.linearRampToValueAtTime(0.25, now + 0.5);
+        droneGain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+
+        droneOsc.connect(droneFilter);
+        droneFilter.connect(droneGain);
+        droneGain.connect(masterGain);
+        droneGain.connect(convolver);
+
+        droneOsc.start(now);
+        droneOsc.stop(now + duration);
+
+        // Layer 3: Deep Cinematic Cosmic Pressure Wave (Brownian low rumble)
+        const noiseLength = Math.floor(ctx.sampleRate * duration);
+        const noiseBuffer = ctx.createBuffer(1, noiseLength, ctx.sampleRate);
+        const noiseData = noiseBuffer.getChannelData(0);
+        let lastOut = 0.0;
+        for (let i = 0; i < noiseLength; i++) {
+          const white = Math.random() * 2 - 1;
+          // Brown noise integration for deep rumble
+          lastOut = (lastOut + 0.02 * white) / 1.02;
+          noiseData[i] = lastOut * 3.5;
+        }
+
+        const brownNoise = ctx.createBufferSource();
+        brownNoise.buffer = noiseBuffer;
+
+        const noiseFilter = ctx.createBiquadFilter();
+        noiseFilter.type = 'lowpass';
+        noiseFilter.frequency.setValueAtTime(90, now);
+        noiseFilter.frequency.linearRampToValueAtTime(220, now + 1.0);
+        noiseFilter.frequency.exponentialRampToValueAtTime(70, now + duration);
+
+        const noiseGain = ctx.createGain();
+        noiseGain.gain.setValueAtTime(0.001, now);
+        noiseGain.gain.linearRampToValueAtTime(0.28, now + 0.45);
+        noiseGain.gain.linearRampToValueAtTime(0.20, now + 1.8);
+        noiseGain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+
+        brownNoise.connect(noiseFilter);
+        noiseFilter.connect(noiseGain);
+        noiseGain.connect(masterGain);
+        noiseGain.connect(convolver);
+
+        brownNoise.start(now);
+        brownNoise.stop(now + duration);
+
+      } catch (err) {
+        console.warn('Audio synthesis error:', err);
+      }
+    }
+
+    // Enter Button Handler -> Smoothly condenses particle logo & transitions into AI homepage
+    function handleEnterAstrx() {
+      const enterStage = document.getElementById('enterStage');
+      const overlay = document.getElementById('transitionOverlay');
+
+      if (enterStage) {
+        enterStage.classList.remove('visible');
+      }
+
+      // Trigger cinematic condensation sound
+      playCondensationSound();
+
+      isCondensingToLogo = true;
+      condenseStartTime = performance.now();
+
+      // Step 1: Smooth same-color overlay fade begins towards the end of condensation
+      setTimeout(() => {
+        if (overlay) {
+          overlay.classList.add('active');
+        }
+      }, 1600);
+
+      // Step 2: Seamless handoff into AI Workspace
+      setTimeout(() => {
+        try {
+          sessionStorage.setItem('astrx_login_transition', 'true');
+        } catch(e) {}
+
+        if (window.location.protocol === 'file:') {
+          window.location.href = 'app.html';
+        } else {
+          window.location.href = '/app';
+        }
+      }, 2350);
+    }
+
+    // Enable pressing Enter on keyboard to enter application once enterStage is visible
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        const enterStage = document.getElementById('enterStage');
+        if (enterStage && enterStage.classList.contains('visible') && !isCondensingToLogo) {
+          e.preventDefault();
+          handleEnterAstrx();
+        }
+      }
+    });
+
+    // Peek password on hover
+    function peekPassword(inputId, show, btn) {
+      const input = document.getElementById(inputId);
+      input.type = show ? 'text' : 'password';
+      updateEyeIcon(btn, show);
+    }
+
+    // Toggle password visibility on click
+    function togglePasswordVisibility(inputId, btn) {
+      const input = document.getElementById(inputId);
+      const isCurrentlyShown = input.type === 'text';
+      input.type = isCurrentlyShown ? 'password' : 'text';
+      updateEyeIcon(btn, !isCurrentlyShown);
+    }
+
+    function updateEyeIcon(btn, isVisible) {
+      if (isVisible) {
+        btn.innerHTML = `
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/>
+            <path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/>
+            <path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/>
+            <line x1="2" x2="22" y1="2" y2="22"/>
+          </svg>
+        `;
+      } else {
+        btn.innerHTML = `
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/>
+            <circle cx="12" cy="12" r="3"/>
+          </svg>
+        `;
+      }
+    }
+
+    function resetToStart() {
+      if (window.grecaptcha) {
+        try {
+          grecaptcha.reset();
+        } catch(e) {}
+      }
+      document.querySelectorAll('input').forEach(i => i.value = '');
+      
+      const mainContainer = document.getElementById('mainContainer');
+      const enterStage = document.getElementById('enterStage');
+      const overlay = document.getElementById('transitionOverlay');
+      if (mainContainer) mainContainer.classList.remove('dissolved');
+      if (enterStage) enterStage.classList.remove('visible');
+      if (overlay) overlay.className = 'transition-overlay';
+      
+      isFinalLockedState = false;
+      isCondensingToLogo = false;
+      cycleStartTime = performance.now();
+      setTab('signup');
+    }
+
+    // ==============================================
+    // ASTRX ANTIGRAVITY SHADER / STARFIELD SIMULATION
+    // ==============================================
+    const ASTRA_SVG_PATH = "M527.5 374C532.2 376.46 533.41 382.96 536.16 387.34C541.35 395.63 545.76 404.56 550.16 413.34C553.09 419.21 556.37 425.12 559.84 430.66C564.82 438.58 567.88 447.74 572.84 455.66C576.52 461.52 578.48 468.48 582.16 474.34C589.05 485.33 594.11 497.51 601 508.5C596.73 511.82 588.02 512.87 582.69 514.19C573.39 516.48 563.47 519.67 554.5 523C543.7 502.39 533.95 480.89 523.5 460C521.36 455.71 515.73 441.06 510.5 441.06C506.37 441.06 503.43 447.44 502.19 450.69C497.78 462.25 491.23 472.73 486.81 484.31C485.14 488.71 482.21 492.62 480.5 497C475.75 509.15 468.84 520.49 464.19 532.69C460.95 541.18 456.43 549.19 453.19 557.69C451.71 561.56 448.75 569.84 446.47 572.97C444.39 575.82 439.94 577.63 437.03 579.53C430.63 583.73 424.95 588.95 418.5 593C418.5 588.18 423.23 580.51 425.84 576.34C428.23 572.54 429.85 568.11 431.5 564C432.07 562.59 433.17 561.64 433.81 560.31C436.77 554.26 439.36 548.02 442.84 542.34C443.68 540.98 443.93 539.45 444.5 538C446.57 532.71 449.71 527.67 452.16 522.66C457.29 512.15 463.25 501.85 467.5 491C470.27 483.93 474.45 477.14 477.84 470.34C485.51 455.01 493.18 439.68 500.84 424.34C506.85 412.33 512.78 400.46 518.84 388.34C521.03 383.97 523.22 376.24 527.5 374ZM718 448.5C721.42 457.7 722.18 468.15 731.03 474.47C735.26 477.49 743.71 478.38 746.5 481C726.3 485.04 722.24 495.32 718.5 514C715.41 510.03 715.64 503.49 713.81 498.69C709.17 486.51 700.27 485 689.5 481C690.94 479.65 693.89 479.41 696.31 478.81C700.49 477.78 705.87 474.53 708.47 470.97C710.98 467.52 713.78 463.51 714.81 459.31C715.68 455.79 715.71 450.79 718 448.5ZM688 502.5C682.86 505.07 677.19 505.87 671.69 507.19C664 509.02 656.37 511.29 648.69 513.19C630.14 517.76 612.07 524.88 593.69 530.19C590.82 531.02 588.11 532.75 585.31 533.81C579.01 536.21 572.63 538.41 566.31 540.81C550.08 547 533.99 553.02 518.34 560.84C515.24 562.39 511.55 563.38 508.66 565.16C500.93 569.9 492.34 573.34 484.66 578.16C475.02 584.2 465.54 590.33 455.97 596.47C437.66 608.21 417.51 624.75 405.84 643.34C401.35 650.51 397.67 659.78 399.03 668.47C399.93 674.2 404.34 681.04 409.03 684.47C411.69 686.41 416.44 688.08 417.5 691C405.17 690.87 383.38 680.7 380.19 667.31C378.66 660.9 379.9 652.7 382.19 646.69C388.04 631.34 410.73 609.24 424.03 599.53C462.12 571.74 502.3 552.59 546.31 535.81C569.81 526.85 593.8 518.72 618.31 513.81C626.47 512.18 634.53 509.76 642.69 508.19C650.24 506.73 657.88 506.16 665.47 504.97C671.14 504.08 682.82 501.52 688 502.5ZM611.5 534C614.43 537.61 616.84 542.75 618.5 547C619.59 549.78 621.52 552.01 622.84 554.66C625.91 560.78 628.52 567.55 632.16 573.34C638.31 583.15 642 594.53 648.16 604.34C653.12 612.26 656.18 621.42 661.16 629.34C666.2 637.39 670.4 645.97 675.53 653.97C679.22 659.72 683.76 665.16 688 670.5C689.69 672.63 691.84 673.98 693.97 675.53C696.3 677.23 698.18 679.29 700.66 680.84C706.39 684.44 713.62 686.12 719 689.91C679.33 689.91 639.67 689.91 600 689.91C607.09 684.92 615.39 683.88 620.53 676.03C621.32 674.83 622.46 673.79 622.81 672.31C625.95 659.15 614.14 637.47 607.16 626.34C605.45 623.62 604.55 620.38 602.84 617.66C599.89 612.95 594.49 603.95 592.5 599C591.12 595.55 589.85 591.86 587.84 588.66C580.93 577.63 572.7 561.52 568 549.5C574.59 546.2 581.49 544.41 588.31 541.81C595.85 538.94 603.59 535.58 611.5 534Z";
+
+    function sampleSvgPoints(pathString, numPoints) {
+      const svgPath = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      svgPath.setAttribute("d", pathString);
+      const totalLen = svgPath.getTotalLength();
+      const points = [];
+      for (let i = 0; i < numPoints; i++) {
+        const pt = svgPath.getPointAtLength((i / numPoints) * totalLen);
+        points.push({
+          x: (pt.x - 563) / 185,
+          y: (pt.y - 532) / 185
+        });
+      }
+      return points;
+    }
+
+    function isMobileViewport() {
+      return window.innerWidth < 600 || window.innerHeight < 600;
+    }
+
+    const canvas = document.getElementById('gravity-canvas');
+    const ctx = canvas.getContext('2d');
+
+    let width = canvas.width = window.innerWidth;
+    let height = canvas.height = window.innerHeight;
+
+    const mouse = {
+      x: width / 2,
+      y: height / 2,
+      targetX: width / 2,
+      targetY: height / 2,
+      radius: isMobileViewport() ? 100 : 220,
+      active: false
+    };
+
+    window.addEventListener('resize', () => {
+      width = canvas.width = window.innerWidth;
+      height = canvas.height = window.innerHeight;
+      mouse.radius = isMobileViewport() ? 100 : 220;
+      initParticles();
+    });
+
+    window.addEventListener('mousemove', (e) => {
+      mouse.targetX = e.clientX;
+      mouse.targetY = e.clientY;
+      mouse.active = true;
+    });
+
+    window.addEventListener('mouseleave', () => {
+      mouse.active = false;
+    });
+
+    window.addEventListener('touchmove', (e) => {
+      if (e.touches && e.touches.length > 0) {
+        mouse.targetX = e.touches[0].clientX;
+        mouse.targetY = e.touches[0].clientY;
+        mouse.active = true;
+      }
+    }, { passive: true });
+
+    window.addEventListener('touchend', () => {
+      mouse.active = false;
+    });
+
+    let morphPhase = 'free';
+    let morphProgress = 0; // 0 to 1 progress within the current phase
+
+    class StarParticle {
+      constructor(isLogoParticle, normPoint) {
+        this.isLogoParticle = isLogoParticle;
+        this.normPoint = normPoint || null;
+        this.reset(true);
+      }
+
+      reset(initial = false) {
+        const isMobile = isMobileViewport();
+        this.x = Math.random() * width;
+        this.y = initial ? Math.random() * height : height + 15;
+        this.vx = (Math.random() - 0.5) * (isMobile ? 0.22 : 0.35);
+        this.vy = -Math.random() * (isMobile ? 0.30 : 0.45) - 0.1;
+        this.size = isMobile ? (Math.random() * 0.85 + 0.35) : (Math.random() * 1.7 + 0.45);
+        this.baseAlpha = Math.random() * 0.5 + 0.2;
+        this.alpha = this.baseAlpha;
+        this.mass = this.size * 1.2;
+        this.twinkleSpeed = Math.random() * 0.02 + 0.005;
+        this.twinklePhase = Math.random() * Math.PI * 2;
+        
+        const shade = Math.floor(Math.random() * 50 + 205);
+        this.color = `rgb(${shade}, ${shade}, ${shade})`;
+
+        this.noiseOffsetX = (Math.random() - 0.5) * (isMobile ? 4 : 8);
+        this.noiseOffsetY = (Math.random() - 0.5) * (isMobile ? 4 : 8);
+        this.targetX = this.x;
+        this.targetY = this.y;
+      }
+
+      updateLogoTarget() {
+        if (!this.isLogoParticle || !this.normPoint) return;
+        const isMobile = isMobileViewport();
+        const scaleFactor = isFinalLockedState ? (isMobile ? 0.36 : 0.48) : (isMobile ? 0.32 : 0.42);
+        const logoScale = Math.min(width, height) * scaleFactor;
+        const centerX = width / 2;
+        const centerY = isFinalLockedState 
+          ? (isMobile ? height / 2 - 32 : height / 2 - 20) 
+          : height / 2;
+        this.targetX = centerX + this.normPoint.x * logoScale + this.noiseOffsetX;
+        this.targetY = centerY + this.normPoint.y * logoScale + this.noiseOffsetY;
+      }
+
+      update() {
+        this.twinklePhase += this.twinkleSpeed;
+        const twinkle = Math.sin(this.twinklePhase) * 0.15;
+
+        const dx = mouse.x - this.x;
+        const dy = mouse.y - this.y;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        let mouseForceX = 0;
+        let mouseForceY = 0;
+
+        if (distance < mouse.radius && mouse.active) {
+          const force = (1 - distance / mouse.radius) * 1.8;
+          const angle = Math.atan2(dy, dx);
+          mouseForceX = -Math.cos(angle) * force * (3.5 / this.mass);
+          mouseForceY = -Math.sin(angle) * force * (3.5 / this.mass);
+        }
+
+        // --- Enter Astrx Clicked: Unhurried, Majestic Condensation & Glide ---
+        if (isCondensingToLogo) {
+          const isMobile = isMobileViewport();
+          const cElapsed = performance.now() - condenseStartTime;
+          const cProg = Math.min(1, cElapsed / 2200);
+          const easeInOut = cProg < 0.5 ? 4 * cProg * cProg * cProg : 1 - Math.pow(-2 * cProg + 2, 3) / 2;
+          const baseScale = isMobile ? 0.36 : 0.48;
+          const endScale = isMobile ? 0.16 : 0.20;
+          const cScale = baseScale - easeInOut * (baseScale - endScale);
+          const upwardGlide = easeInOut * (isMobile ? 55 : 75);
+
+          if (this.isLogoParticle) {
+            const logoScale = Math.min(width, height) * cScale;
+            const centerX = width / 2;
+            const centerY = (height / 2 - (isMobile ? 32 : 20)) - upwardGlide;
+            const targetX = centerX + this.normPoint.x * logoScale;
+            const targetY = centerY + this.normPoint.y * logoScale;
+
+            const lerpSpeed = 0.035 + easeInOut * 0.075;
+            this.x += (targetX - this.x) * lerpSpeed;
+            this.y += (targetY - this.y) * lerpSpeed;
+            this.alpha = 0.95;
+          } else {
+            // Ambient stars gently fade out during condensation
+            this.alpha = Math.max(0, this.baseAlpha * (1 - easeInOut * 1.5));
+            this.x += this.vx * 0.25;
+            this.y += this.vy * 0.25;
+          }
+          return;
+        }
+
+        // --- Post-Auth Formed State: Progressive, Majestic Constellation Formation ---
+        if (isFinalLockedState) {
+          if (this.isLogoParticle) {
+            this.updateLogoTarget();
+
+            const authElapsed = performance.now() - authLockStartTime;
+            const authProgress = Math.min(1, authElapsed / 3800);
+            const authCurve = Math.pow(authProgress, 2.0);
+            const easeSpeed = 0.008 + authCurve * 0.038;
+            const driftWeight = Math.max(0, 1 - authCurve);
+
+            this.x += this.vx * driftWeight * 0.5 + (this.targetX + mouseForceX * 1.5 - this.x) * easeSpeed;
+            this.y += this.vy * driftWeight * 0.5 + (this.targetY + mouseForceY * 1.5 - this.y) * easeSpeed;
+            this.alpha += (0.95 - this.alpha) * (0.018 + authCurve * 0.035);
+          } else {
+            this.y += this.vy * 0.6 + mouseForceY * 0.8;
+            this.x += this.vx * 0.6 + mouseForceX * 0.8;
+            this.alpha = Math.max(0.1, Math.min(0.7, this.baseAlpha + twinkle + (distance < mouse.radius && mouse.active ? 0.3 : 0)));
+            if (this.y < -15 || this.x < -15 || this.x > width + 15) this.reset();
+          }
+          return;
+        }
+
+        if (!this.isLogoParticle || morphPhase === 'free') {
+          this.y += this.vy + mouseForceY;
+          this.x += this.vx + mouseForceX;
+
+          if (distance < mouse.radius && mouse.active) {
+            this.alpha = Math.min(1, this.baseAlpha + (1 - distance / mouse.radius) * 0.45);
+          } else {
+            this.alpha = Math.max(0.1, Math.min(1, this.baseAlpha + twinkle));
+          }
+
+          if (this.y < -15 || this.x < -15 || this.x > width + 15) {
+            this.reset();
+          }
+
+        } else if (morphPhase === 'forming') {
+          this.updateLogoTarget();
+
+          const progressCurve = Math.pow(Math.min(1, Math.max(0, morphProgress)), 2.6);
+          const easeSpeed = 0.0006 + progressCurve * 0.032;
+          const driftWeight = Math.max(0, 1 - progressCurve);
+
+          this.x += this.vx * driftWeight + (this.targetX + mouseForceX * 1.2 - this.x) * easeSpeed;
+          this.y += this.vy * driftWeight + (this.targetY + mouseForceY * 1.2 - this.y) * easeSpeed;
+
+          this.alpha += (0.88 - this.alpha) * (0.004 + progressCurve * 0.02);
+
+        } else if (morphPhase === 'holding') {
+          this.updateLogoTarget();
+
+          this.x += (this.targetX + mouseForceX * 1.2 - this.x) * 0.03;
+          this.y += (this.targetY + mouseForceY * 1.2 - this.y) * 0.03;
+          this.alpha += (0.9 - this.alpha) * 0.02;
+
+        } else if (morphPhase === 'dispersing') {
+          const dispProgress = Math.min(1, Math.max(0, morphProgress));
+          const dispSpeed = 0.6 + dispProgress * 0.4;
+          this.x += this.vx * dispSpeed + mouseForceX + (Math.random() - 0.5) * 0.12;
+          this.y += this.vy * dispSpeed + mouseForceY - Math.random() * 0.08;
+          this.alpha += (this.baseAlpha - this.alpha) * 0.015;
+
+          if (this.y < -15 || this.x < -15 || this.x > width + 15) {
+            this.reset();
+          }
+        }
+      }
+
+      draw() {
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+        ctx.fillStyle = this.color;
+        ctx.globalAlpha = this.alpha;
+        
+        if (this.isLogoParticle && (isCondensingToLogo || isFinalLockedState || morphPhase === 'holding' || morphPhase === 'forming')) {
+          ctx.shadowBlur = isCondensingToLogo ? this.size * 9 : this.size * 7;
+          ctx.shadowColor = isCondensingToLogo ? 'rgba(255, 255, 255, 0.9)' : 'rgba(255, 255, 255, 0.7)';
+        } else {
+          ctx.shadowBlur = this.size * 3;
+          ctx.shadowColor = 'rgba(255, 255, 255, 0.3)';
+        }
+        
+        ctx.fill();
+        ctx.restore();
+      }
+    }
+
+    let particles = [];
+
+    function initParticles() {
+      particles = [];
+      const isMobile = isMobileViewport();
+      const LOGO_PARTICLE_COUNT = isMobile ? 85 : 180;
+      const AMBIENT_PARTICLE_COUNT = isMobile ? 70 : 240;
+
+      const logoPoints = sampleSvgPoints(ASTRA_SVG_PATH, LOGO_PARTICLE_COUNT);
+
+      for (let i = 0; i < LOGO_PARTICLE_COUNT; i++) {
+        const p = new StarParticle(true, logoPoints[i]);
+        particles.push(p);
+      }
+
+      for (let i = 0; i < AMBIENT_PARTICLE_COUNT; i++) {
+        const p = new StarParticle(false, null);
+        particles.push(p);
+      }
+    }
+
+    initParticles();
+
+    let cycleStartTime = performance.now();
+
+    function updateMorphCycle(now) {
+      if (isFinalLockedState) return;
+
+      const elapsed = now - cycleStartTime;
+
+      if (elapsed > 27000) {
+        cycleStartTime = now;
+        morphPhase = 'free';
+        morphProgress = 0;
+      } else if (elapsed > 21000) {
+        morphPhase = 'dispersing';
+        morphProgress = (elapsed - 21000) / 6000;
+      } else if (elapsed > 15000) {
+        morphPhase = 'holding';
+        morphProgress = (elapsed - 15000) / 6000;
+      } else if (elapsed > 6000) {
+        morphPhase = 'forming';
+        morphProgress = (elapsed - 6000) / 9000;
+      } else {
+        morphPhase = 'free';
+        morphProgress = elapsed / 6000;
+      }
+    }
+
+    function animate(now = 0) {
+      updateMorphCycle(now);
+
+      mouse.x += (mouse.targetX - mouse.x) * 0.1;
+      mouse.y += (mouse.targetY - mouse.y) * 0.1;
+
+      ctx.clearRect(0, 0, width, height);
+
+      const isMobile = isMobileViewport();
+      const isLogoActive = isCondensingToLogo || isFinalLockedState || (morphPhase === 'holding' || morphPhase === 'forming');
+      const maxConnectDist = isCondensingToLogo 
+        ? (isMobile ? 18 : 26) 
+        : (isFinalLockedState || morphPhase === 'holding' || morphPhase === 'forming' 
+          ? (isMobile ? 28 : 42) 
+          : (isMobile ? 40 : 65));
+      const threadAlpha = isCondensingToLogo 
+        ? 0.32 
+        : ((isFinalLockedState || morphPhase === 'holding') ? 0.14 : (isMobile ? 0.04 : 0.05));
+
+      for (let i = 0; i < particles.length; i++) {
+        for (let j = i + 1; j < particles.length; j++) {
+          const dx = particles[i].x - particles[j].x;
+          const dy = particles[i].y - particles[j].y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+
+          if (dist < maxConnectDist) {
+            ctx.beginPath();
+            ctx.moveTo(particles[i].x, particles[i].y);
+            ctx.lineTo(particles[j].x, particles[j].y);
+            ctx.strokeStyle = `rgba(255, 255, 255, ${(1 - dist / maxConnectDist) * threadAlpha})`;
+            ctx.lineWidth = isMobile ? 0.4 : 0.5;
+            ctx.stroke();
+          }
+        }
+      }
+
+      particles.forEach(p => {
+        p.update();
+        p.draw();
+      });
+
+      requestAnimationFrame(animate);
+    }
+
+    animate();
+
+    // Initialize with sign-up tab active
+    window.addEventListener('DOMContentLoaded', () => {
+      setTab('signup');
+    });
+  </script>
+</body>
+</html>

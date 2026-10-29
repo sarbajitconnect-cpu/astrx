@@ -1,0 +1,930 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ASTRX</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Plus+Jakarta+Sans:wght@300;400;500;600&family=Victor+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    :root {
+      --bg: #030508;
+      --text-main: #ffffff;
+      --text-muted: rgba(255, 255, 255, 0.4);
+      --ease: cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    body {
+      background-color: var(--bg);
+      color: var(--text-main);
+      font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+      min-height: 100vh;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      user-select: none;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* Interactive Antigravity Canvas */
+    #gravity-canvas {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      z-index: 1;
+      pointer-events: none;
+    }
+
+    /* Ambient Monochrome Radiance */
+    .ambient-glow {
+      position: fixed;
+      width: 850px;
+      height: 850px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(255, 255, 255, 0.04) 0%, rgba(255, 255, 255, 0.005) 45%, transparent 70%);
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      pointer-events: none;
+      z-index: 0;
+      transition: transform 1.5s var(--ease), opacity 1.5s ease;
+    }
+
+    .ambient-glow.expanded {
+      transform: translate(-50%, -50%) scale(1.3);
+      opacity: 0.9;
+    }
+
+    /* Main UI Container */
+    .container {
+      position: relative;
+      z-index: 10;
+      width: 100%;
+      max-width: 380px;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      transition: opacity 0.6s var(--ease), transform 0.6s var(--ease), filter 0.6s ease;
+    }
+
+    .container.dissolved {
+      opacity: 0;
+      transform: scale(0.93) translateY(-10px);
+      filter: blur(10px);
+      pointer-events: none;
+    }
+
+    /* Brand Header */
+    .brand-header {
+      text-align: center;
+      margin-bottom: 26px;
+      cursor: default;
+    }
+
+    .brand-title {
+      font-family: 'Instrument Serif', Georgia, serif;
+      font-size: 64px;
+      font-weight: 400;
+      letter-spacing: 0.05em;
+      background: linear-gradient(180deg, #FFFFFF 15%, #9E9E9E 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      line-height: 1;
+      text-shadow: 0 0 40px rgba(255, 255, 255, 0.15);
+      transition: transform 0.4s var(--ease);
+    }
+
+    .brand-header:hover .brand-title {
+      transform: scale(1.02);
+    }
+
+    /* Minimalist Glass Card without Harsh White Outlines (Top Specular Highlight Only) */
+    .auth-card {
+      width: 100%;
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.045) 0%, rgba(255, 255, 255, 0.015) 100%);
+      backdrop-filter: blur(40px) saturate(140%);
+      -webkit-backdrop-filter: blur(40px) saturate(140%);
+      border: none;
+      border-top: 1px solid rgba(255, 255, 255, 0.16);
+      border-radius: 24px;
+      padding: 22px 20px 20px;
+      box-shadow: 
+        0 30px 60px -15px rgba(0, 0, 0, 0.85),
+        0 1px 0 0 rgba(255, 255, 255, 0.1) inset;
+      position: relative;
+      transition: border-top-color 0.3s ease, box-shadow 0.3s ease;
+    }
+
+    .auth-card:hover {
+      border-top-color: rgba(255, 255, 255, 0.28);
+      box-shadow: 
+        0 35px 70px -15px rgba(0, 0, 0, 0.9),
+        0 0 30px rgba(255, 255, 255, 0.03),
+        0 1px 0 0 rgba(255, 255, 255, 0.18) inset;
+    }
+
+    /* Minimalist Tab Switcher (Top Rim Only) */
+    .tab-switcher {
+      display: flex;
+      background: rgba(255, 255, 255, 0.025);
+      border: none;
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 100px;
+      padding: 3px;
+      margin-bottom: 18px;
+      position: relative;
+      box-shadow: 0 1px 0 0 rgba(255, 255, 255, 0.04) inset;
+    }
+
+    .tab-pill-indicator {
+      position: absolute;
+      top: 3px;
+      left: 3px;
+      width: calc(50% - 3px);
+      height: calc(100% - 6px);
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.12) 0%, rgba(255, 255, 255, 0.05) 100%);
+      border: none;
+      border-top: 1px solid rgba(255, 255, 255, 0.22);
+      border-radius: 100px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3), 0 1px 0 0 rgba(255, 255, 255, 0.15) inset;
+      transition: transform 0.32s var(--ease);
+      pointer-events: none;
+    }
+
+    .tab-btn {
+      flex: 1;
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 500;
+      padding: 7px 0;
+      border-radius: 100px;
+      cursor: pointer;
+      position: relative;
+      z-index: 2;
+      transition: color 0.25s ease;
+    }
+
+    .tab-btn.active {
+      color: #ffffff;
+      font-weight: 600;
+    }
+
+    /* Form & Morphing Fields */
+    .form-group {
+      position: relative;
+      margin-bottom: 10px;
+    }
+
+    .collapsible-field {
+      max-height: 0;
+      opacity: 0;
+      overflow: hidden;
+      margin-bottom: 0;
+      transform: translateY(-6px);
+      transition: max-height 0.32s var(--ease), opacity 0.25s ease, transform 0.32s var(--ease), margin-bottom 0.32s var(--ease);
+    }
+
+    .collapsible-field.expanded {
+      max-height: 60px;
+      opacity: 1;
+      transform: translateY(0);
+      margin-bottom: 10px;
+    }
+
+    .input-wrapper {
+      position: relative;
+      display: flex;
+      align-items: center;
+    }
+
+    /* Input Field without Harsh Outline */
+    .input-field {
+      width: 100%;
+      height: 44px;
+      background: rgba(255, 255, 255, 0.035);
+      border: none;
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 14px;
+      padding: 0 14px;
+      font-family: inherit;
+      font-size: 13px;
+      color: var(--text-main);
+      outline: none;
+      box-shadow: 0 1px 0 0 rgba(255, 255, 255, 0.04) inset;
+      transition: background 0.2s ease, border-top-color 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    .input-field::placeholder {
+      color: rgba(255, 255, 255, 0.25);
+    }
+
+    .input-field:focus {
+      background: rgba(255, 255, 255, 0.06);
+      border-top: 1px solid rgba(255, 255, 255, 0.3);
+      box-shadow: 0 1px 0 0 rgba(255, 255, 255, 0.2) inset, 0 0 20px rgba(255, 255, 255, 0.04);
+    }
+
+    .input-field.has-icon {
+      padding-right: 40px;
+    }
+
+    .input-icon-btn {
+      position: absolute;
+      right: 10px;
+      background: transparent;
+      border: none;
+      color: rgba(255, 255, 255, 0.35);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 4px;
+      border-radius: 6px;
+      transition: color 0.2s ease;
+    }
+
+    .input-icon-btn:hover {
+      color: rgba(255, 255, 255, 0.8);
+    }
+
+    /* Submit Button with Top Specular Glow */
+    .submit-btn {
+      width: 100%;
+      height: 44px;
+      background: linear-gradient(180deg, #FFFFFF 0%, #E2E8F0 100%);
+      color: #030508;
+      border: none;
+      border-radius: 100px;
+      font-family: inherit;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      margin-top: 14px;
+      box-shadow: 
+        0 4px 16px rgba(255, 255, 255, 0.15),
+        0 1px 0 0 rgba(255, 255, 255, 0.8) inset;
+      transition: transform 0.2s var(--ease), background 0.2s ease, box-shadow 0.2s ease;
+      position: relative;
+    }
+
+    .submit-btn:hover {
+      transform: translateY(-1px);
+      background: #ffffff;
+      box-shadow: 
+        0 6px 20px rgba(255, 255, 255, 0.25),
+        0 1px 0 0 rgba(255, 255, 255, 0.9) inset;
+    }
+
+    .submit-btn:active {
+      transform: translateY(0);
+    }
+
+    .btn-label {
+      transition: opacity 0.2s ease, transform 0.2s var(--ease);
+    }
+
+    /* Test Credentials Hint Badge */
+    .test-badge {
+      margin-top: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      width: 100%;
+      padding: 6px 10px;
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.025);
+      border: none;
+      border-top: 1px dashed rgba(255, 255, 255, 0.08);
+      font-family: 'Victor Mono', monospace;
+      font-size: 10px;
+      color: rgba(255, 255, 255, 0.45);
+      cursor: pointer;
+      transition: background 0.2s ease, color 0.2s ease;
+    }
+
+    .test-badge:hover {
+      background: rgba(255, 255, 255, 0.05);
+      color: #ffffff;
+    }
+
+    /* Divider */
+    .divider {
+      display: flex;
+      align-items: center;
+      margin: 14px 0 10px;
+      color: rgba(255, 255, 255, 0.2);
+      font-size: 10px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      font-family: 'Victor Mono', monospace;
+    }
+
+    .divider::before, .divider::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: rgba(255, 255, 255, 0.04);
+    }
+
+    .divider span {
+      padding: 0 10px;
+    }
+
+    /* Minimalist Social Buttons (Top Light Rim Only) */
+    .social-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .social-btn {
+      height: 38px;
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.04) 0%, rgba(255, 255, 255, 0.015) 100%);
+      border: none;
+      border-top: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 12px;
+      color: rgba(255, 255, 255, 0.75);
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      box-shadow: 0 1px 0 0 rgba(255, 255, 255, 0.05) inset;
+      transition: all 0.2s var(--ease);
+    }
+
+    .social-btn:hover {
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.03) 100%);
+      border-top-color: rgba(255, 255, 255, 0.22);
+      color: #ffffff;
+      transform: translateY(-1px);
+    }
+
+    .social-icon {
+      width: 14px;
+      height: 14px;
+      opacity: 0.85;
+    }
+
+    /* Final Stage: Enter ASTRX Floating Bottom Pill */
+    .enter-stage {
+      position: fixed;
+      bottom: 48px;
+      left: 50%;
+      transform: translateX(-50%) translateY(30px);
+      z-index: 30;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.8s var(--ease), transform 0.8s var(--ease);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    .enter-stage.visible {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+      pointer-events: auto;
+    }
+
+    .enter-astrx-btn {
+      height: 50px;
+      padding: 0 34px;
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.14) 0%, rgba(255, 255, 255, 0.04) 100%);
+      backdrop-filter: blur(32px) saturate(160%);
+      -webkit-backdrop-filter: blur(32px) saturate(160%);
+      border: none;
+      border-top: 1px solid rgba(255, 255, 255, 0.35); /* Top specular highlight */
+      border-radius: 100px;
+      color: #ffffff;
+      font-family: inherit;
+      font-size: 14px;
+      font-weight: 500;
+      letter-spacing: 0.03em;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      box-shadow: 
+        0 24px 48px -12px rgba(0, 0, 0, 0.8),
+        0 1px 0 0 rgba(255, 255, 255, 0.25) inset,
+        0 -1px 0 0 rgba(0, 0, 0, 0.4) inset,
+        0 0 30px rgba(255, 255, 255, 0.06);
+      transition: all 0.3s var(--ease);
+    }
+
+    .enter-astrx-btn:hover {
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.22) 0%, rgba(255, 255, 255, 0.08) 100%);
+      border-top-color: rgba(255, 255, 255, 0.6);
+      transform: translateY(-2px) scale(1.03);
+      box-shadow: 
+        0 28px 56px -12px rgba(0, 0, 0, 0.9),
+        0 1px 0 0 rgba(255, 255, 255, 0.45) inset,
+        0 0 45px rgba(255, 255, 255, 0.16);
+    }
+
+    .enter-astrx-btn:active {
+      transform: translateY(0) scale(0.98);
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Ambient Monochrome Radiance -->
+  <div class="ambient-glow" id="ambientGlow"></div>
+
+  <!-- Interactive Antigravity Canvas -->
+  <canvas id="gravity-canvas"></canvas>
+
+  <div class="container" id="mainContainer">
+    <!-- Brand Header -->
+    <div class="brand-header">
+      <h1 class="brand-title">ASTRX</h1>
+    </div>
+
+    <!-- Minimalist Glass Card -->
+    <div class="auth-card" id="authCard">
+      
+      <!-- Minimalist Switcher -->
+      <div class="tab-switcher">
+        <div class="tab-pill-indicator" id="tabIndicator"></div>
+        <button type="button" class="tab-btn active" id="tabSignInBtn" onclick="switchAuthMode('signin')">Sign In</button>
+        <button type="button" class="tab-btn" id="tabSignUpBtn" onclick="switchAuthMode('signup')">Sign Up</button>
+      </div>
+
+      <!-- Single Morphing Form -->
+      <form id="authForm" onsubmit="handleAuthSubmit(event)">
+        
+        <!-- Expanding Username Field for Sign Up -->
+        <div class="form-group collapsible-field" id="usernameGroup">
+          <div class="input-wrapper">
+            <input type="text" id="auth-username" class="input-field" placeholder="Username" value="sounak" autocomplete="nickname" />
+          </div>
+        </div>
+
+        <!-- Email or Username Field -->
+        <div class="form-group">
+          <div class="input-wrapper">
+            <input type="text" id="auth-email" class="input-field" placeholder="Email or Username" value="admin@astrx.ai" required autocomplete="username" />
+          </div>
+        </div>
+
+        <!-- Password Field -->
+        <div class="form-group">
+          <div class="input-wrapper">
+            <input type="password" id="auth-password" class="input-field has-icon" placeholder="Password" value="astrx2026" required autocomplete="current-password" />
+            <button type="button" class="input-icon-btn" onclick="togglePasswordVisibility('auth-password', this)" title="Toggle visibility">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <!-- Submit Button -->
+        <button type="submit" class="submit-btn" id="submitBtn">
+          <span class="btn-label" id="submitBtnText">Continue to ASTRX</span>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+        </button>
+
+        <!-- Test Credentials Autofill Badge -->
+        <div class="test-badge" onclick="fillTestCredentials()" title="Click to auto-populate test credentials">
+          <span>TEST ACCOUNT: admin@astrx.ai</span>
+          <span style="color: rgba(255,255,255,0.75);">Auto-fill ↵</span>
+        </div>
+      </form>
+
+      <!-- Social Options -->
+      <div class="divider">
+        <span>or</span>
+      </div>
+
+      <div class="social-grid">
+        <button type="button" class="social-btn" onclick="handleSocialAuth('Google')">
+          <svg class="social-icon" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#EEEEEE"/>
+            <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#CCCCCC"/>
+            <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" fill="#AAAAAA"/>
+            <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" fill="#FFFFFF"/>
+          </svg>
+          <span>Google</span>
+        </button>
+
+        <button type="button" class="social-btn" onclick="handleSocialAuth('GitHub')">
+          <svg class="social-icon" viewBox="0 0 24 24" fill="currentColor">
+            <path fill-rule="evenodd" clip-rule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.53 1.032 1.53 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"/>
+          </svg>
+          <span>GitHub</span>
+        </button>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Final Stage: Enter ASTRX Button -->
+  <div class="enter-stage" id="enterStage">
+    <button type="button" class="enter-astrx-btn" onclick="handleEnterAstrx()">
+      <span>Enter ASTRX</span>
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+    </button>
+  </div>
+
+  <script>
+    let currentAuthMode = 'signin';
+    let isFinalLockedState = false;
+
+    // --- Original Astra SVG Logo Path (Favicon) ---
+    const ASTRA_SVG_PATH = "M527.5 374C532.2 376.46 533.41 382.96 536.16 387.34C541.35 395.63 545.76 404.56 550.16 413.34C553.09 419.21 556.37 425.12 559.84 430.66C564.82 438.58 567.88 447.74 572.84 455.66C576.52 461.52 578.48 468.48 582.16 474.34C589.05 485.33 594.11 497.51 601 508.5C596.73 511.82 588.02 512.87 582.69 514.19C573.39 516.48 563.47 519.67 554.5 523C543.7 502.39 533.95 480.89 523.5 460C521.36 455.71 515.73 441.06 510.5 441.06C506.37 441.06 503.43 447.44 502.19 450.69C497.78 462.25 491.23 472.73 486.81 484.31C485.14 488.71 482.21 492.62 480.5 497C475.75 509.15 468.84 520.49 464.19 532.69C460.95 541.18 456.43 549.19 453.19 557.69C451.71 561.56 448.75 569.84 446.47 572.97C444.39 575.82 439.94 577.63 437.03 579.53C430.63 583.73 424.95 588.95 418.5 593C418.5 588.18 423.23 580.51 425.84 576.34C428.23 572.54 429.85 568.11 431.5 564C432.07 562.59 433.17 561.64 433.81 560.31C436.77 554.26 439.36 548.02 442.84 542.34C443.68 540.98 443.93 539.45 444.5 538C446.57 532.71 449.71 527.67 452.16 522.66C457.29 512.15 463.25 501.85 467.5 491C470.27 483.93 474.45 477.14 477.84 470.34C485.51 455.01 493.18 439.68 500.84 424.34C506.85 412.33 512.78 400.46 518.84 388.34C521.03 383.97 523.22 376.24 527.5 374ZM718 448.5C721.42 457.7 722.18 468.15 731.03 474.47C735.26 477.49 743.71 478.38 746.5 481C726.3 485.04 722.24 495.32 718.5 514C715.41 510.03 715.64 503.49 713.81 498.69C709.17 486.51 700.27 485 689.5 481C690.94 479.65 693.89 479.41 696.31 478.81C700.49 477.78 705.87 474.53 708.47 470.97C710.98 467.52 713.78 463.51 714.81 459.31C715.68 455.79 715.71 450.79 718 448.5ZM688 502.5C682.86 505.07 677.19 505.87 671.69 507.19C664 509.02 656.37 511.29 648.69 513.19C630.14 517.76 612.07 524.88 593.69 530.19C590.82 531.02 588.11 532.75 585.31 533.81C579.01 536.21 572.63 538.41 566.31 540.81C550.08 547 533.99 553.02 518.34 560.84C515.24 562.39 511.55 563.38 508.66 565.16C500.93 569.9 492.34 573.34 484.66 578.16C475.02 584.2 465.54 590.33 455.97 596.47C437.66 608.21 417.51 624.75 405.84 643.34C401.35 650.51 397.67 659.78 399.03 668.47C399.93 674.2 404.34 681.04 409.03 684.47C411.69 686.41 416.44 688.08 417.5 691C405.17 690.87 383.38 680.7 380.19 667.31C378.66 660.9 379.9 652.7 382.19 646.69C388.04 631.34 410.73 609.24 424.03 599.53C462.12 571.74 502.3 552.59 546.31 535.81C569.81 526.85 593.8 518.72 618.31 513.81C626.47 512.18 634.53 509.76 642.69 508.19C650.24 506.73 657.88 506.16 665.47 504.97C671.14 504.08 682.82 501.52 688 502.5ZM611.5 534C614.43 537.61 616.84 542.75 618.5 547C619.59 549.78 621.52 552.01 622.84 554.66C625.91 560.78 628.52 567.55 632.16 573.34C638.31 583.15 642 594.53 648.16 604.34C653.12 612.26 656.18 621.42 661.16 629.34C666.2 637.39 670.4 645.97 675.53 653.97C679.22 659.72 683.76 665.16 688 670.5C689.69 672.63 691.84 673.98 693.97 675.53C696.3 677.23 698.18 679.29 700.66 680.84C706.39 684.44 713.62 686.12 719 689.91C679.33 689.91 639.67 689.91 600 689.91C607.09 684.92 615.39 683.88 620.53 676.03C621.32 674.83 622.46 673.79 622.81 672.31C625.95 659.15 614.14 637.47 607.16 626.34C605.45 623.62 604.55 620.38 602.84 617.66C599.89 612.95 594.49 603.95 592.5 599C591.12 595.55 589.85 591.86 587.84 588.66C580.93 577.63 572.7 561.52 568 549.5C574.59 546.2 581.49 544.41 588.31 541.81C595.85 538.94 603.59 535.58 611.5 534Z";
+
+    function sampleSvgPoints(pathString, numPoints) {
+      const svgPath = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      svgPath.setAttribute("d", pathString);
+      const totalLen = svgPath.getTotalLength();
+      const points = [];
+      for (let i = 0; i < numPoints; i++) {
+        const pt = svgPath.getPointAtLength((i / numPoints) * totalLen);
+        points.push({
+          x: (pt.x - 563) / 185,
+          y: (pt.y - 532) / 185
+        });
+      }
+      return points;
+    }
+
+    // --- Antigravity Canvas Simulation ---
+    const canvas = document.getElementById('gravity-canvas');
+    const ctx = canvas.getContext('2d');
+
+    let width = canvas.width = window.innerWidth;
+    let height = canvas.height = window.innerHeight;
+
+    window.addEventListener('resize', () => {
+      width = canvas.width = window.innerWidth;
+      height = canvas.height = window.innerHeight;
+      initParticles();
+    });
+
+    const mouse = {
+      x: width / 2,
+      y: height / 2,
+      targetX: width / 2,
+      targetY: height / 2,
+      radius: 220,
+      active: false
+    };
+
+    window.addEventListener('mousemove', (e) => {
+      mouse.targetX = e.clientX;
+      mouse.targetY = e.clientY;
+      mouse.active = true;
+    });
+
+    window.addEventListener('mouseleave', () => {
+      mouse.active = false;
+    });
+
+    let morphPhase = 'free';
+
+    class StarParticle {
+      constructor(isLogoParticle, normPoint) {
+        this.isLogoParticle = isLogoParticle;
+        this.normPoint = normPoint || null;
+        this.reset(true);
+      }
+
+      reset(initial = false) {
+        this.x = Math.random() * width;
+        this.y = initial ? Math.random() * height : height + 15;
+        this.vx = (Math.random() - 0.5) * 0.35;
+        this.vy = -Math.random() * 0.45 - 0.15;
+        this.size = Math.random() * 1.7 + 0.45;
+        this.baseAlpha = Math.random() * 0.5 + 0.2;
+        this.alpha = this.baseAlpha;
+        this.mass = this.size * 1.2;
+        this.twinkleSpeed = Math.random() * 0.02 + 0.005;
+        this.twinklePhase = Math.random() * Math.PI * 2;
+        
+        const shade = Math.floor(Math.random() * 50 + 205);
+        this.color = `rgb(${shade}, ${shade}, ${shade})`;
+
+        this.noiseOffsetX = (Math.random() - 0.5) * 8;
+        this.noiseOffsetY = (Math.random() - 0.5) * 8;
+        this.targetX = this.x;
+        this.targetY = this.y;
+      }
+
+      updateLogoTarget() {
+        if (!this.isLogoParticle || !this.normPoint) return;
+        const scaleFactor = isFinalLockedState ? 0.48 : 0.42;
+        const logoScale = Math.min(width, height) * scaleFactor;
+        const centerX = width / 2;
+        const centerY = isFinalLockedState ? height / 2 - 20 : height / 2;
+        this.targetX = centerX + this.normPoint.x * logoScale + this.noiseOffsetX;
+        this.targetY = centerY + this.normPoint.y * logoScale + this.noiseOffsetY;
+      }
+
+      update() {
+        this.twinklePhase += this.twinkleSpeed;
+        const twinkle = Math.sin(this.twinklePhase) * 0.15;
+
+        // Calculate cursor distance for interactive gravity well
+        const dx = mouse.x - this.x;
+        const dy = mouse.y - this.y;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        let mouseForceX = 0;
+        let mouseForceY = 0;
+
+        if (distance < mouse.radius && mouse.active) {
+          const force = (1 - distance / mouse.radius) * 1.8;
+          const angle = Math.atan2(dy, dx);
+          mouseForceX = -Math.cos(angle) * force * (3.5 / this.mass);
+          mouseForceY = -Math.sin(angle) * force * (3.5 / this.mass);
+        }
+
+        if (isFinalLockedState) {
+          if (this.isLogoParticle) {
+            this.updateLogoTarget();
+            this.x += (this.targetX + mouseForceX * 1.5 - this.x) * 0.038;
+            this.y += (this.targetY + mouseForceY * 1.5 - this.y) * 0.038;
+            this.alpha += (0.92 - this.alpha) * 0.04;
+          } else {
+            this.y += this.vy * 0.6 + mouseForceY * 0.8;
+            this.x += this.vx * 0.6 + mouseForceX * 0.8;
+            this.alpha = Math.max(0.1, Math.min(0.7, this.baseAlpha + twinkle + (distance < mouse.radius && mouse.active ? 0.3 : 0)));
+            if (this.y < -15 || this.x < -15 || this.x > width + 15) this.reset();
+          }
+          return;
+        }
+
+        // Standard Preview Animation Cycle (Before Final Sign In)
+        if (!this.isLogoParticle || morphPhase === 'free') {
+          this.y += this.vy + mouseForceY;
+          this.x += this.vx + mouseForceX;
+
+          if (distance < mouse.radius && mouse.active) {
+            this.alpha = Math.min(1, this.baseAlpha + (1 - distance / mouse.radius) * 0.45);
+          } else {
+            this.alpha = Math.max(0.1, Math.min(1, this.baseAlpha + twinkle));
+          }
+
+          if (this.y < -15 || this.x < -15 || this.x > width + 15) {
+            this.reset();
+          }
+
+        } else if (morphPhase === 'forming' || morphPhase === 'holding') {
+          this.updateLogoTarget();
+
+          const easeSpeed = morphPhase === 'forming' ? 0.022 : 0.05;
+          this.x += (this.targetX + mouseForceX * 1.2 - this.x) * easeSpeed;
+          this.y += (this.targetY + mouseForceY * 1.2 - this.y) * easeSpeed;
+
+          this.alpha += (0.88 - this.alpha) * 0.03;
+
+        } else if (morphPhase === 'dispersing') {
+          this.x += this.vx * 1.8 + mouseForceX + (Math.random() - 0.5) * 0.5;
+          this.y += this.vy * 1.8 + mouseForceY - Math.random() * 0.3;
+          this.alpha += (this.baseAlpha - this.alpha) * 0.025;
+
+          if (this.y < -15 || this.x < -15 || this.x > width + 15) {
+            this.reset();
+          }
+        }
+      }
+
+      draw() {
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+        ctx.fillStyle = this.color;
+        ctx.globalAlpha = this.alpha;
+        
+        if (this.isLogoParticle && (isFinalLockedState || morphPhase === 'holding' || morphPhase === 'forming')) {
+          ctx.shadowBlur = this.size * 7;
+          ctx.shadowColor = 'rgba(255, 255, 255, 0.7)';
+        } else {
+          ctx.shadowBlur = this.size * 3;
+          ctx.shadowColor = 'rgba(255, 255, 255, 0.3)';
+        }
+        
+        ctx.fill();
+        ctx.restore();
+      }
+    }
+
+    let particles = [];
+    const LOGO_PARTICLE_COUNT = 180;
+    const AMBIENT_PARTICLE_COUNT = 240;
+
+    function initParticles() {
+      particles = [];
+      const logoPoints = sampleSvgPoints(ASTRA_SVG_PATH, LOGO_PARTICLE_COUNT);
+
+      for (let i = 0; i < LOGO_PARTICLE_COUNT; i++) {
+        const p = new StarParticle(true, logoPoints[i]);
+        particles.push(p);
+      }
+
+      for (let i = 0; i < AMBIENT_PARTICLE_COUNT; i++) {
+        const p = new StarParticle(false, null);
+        particles.push(p);
+      }
+    }
+
+    initParticles();
+
+    let cycleStartTime = performance.now();
+
+    function updateMorphCycle(now) {
+      if (isFinalLockedState) return;
+
+      const elapsed = now - cycleStartTime;
+
+      if (elapsed > 17500) {
+        cycleStartTime = now;
+        morphPhase = 'free';
+      } else if (elapsed > 14500) {
+        morphPhase = 'dispersing';
+      } else if (elapsed > 11500) {
+        morphPhase = 'holding';
+      } else if (elapsed > 8000) {
+        morphPhase = 'forming';
+      } else {
+        morphPhase = 'free';
+      }
+    }
+
+    function animate(now = 0) {
+      updateMorphCycle(now);
+
+      mouse.x += (mouse.targetX - mouse.x) * 0.1;
+      mouse.y += (mouse.targetY - mouse.y) * 0.1;
+
+      ctx.clearRect(0, 0, width, height);
+
+      const isLogoActive = isFinalLockedState || (morphPhase === 'holding' || morphPhase === 'forming');
+      const maxConnectDist = isLogoActive ? 42 : 65;
+      const threadAlpha = (isFinalLockedState || morphPhase === 'holding') ? 0.14 : 0.05;
+
+      for (let i = 0; i < particles.length; i++) {
+        for (let j = i + 1; j < particles.length; j++) {
+          const dx = particles[i].x - particles[j].x;
+          const dy = particles[i].y - particles[j].y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+
+          if (dist < maxConnectDist) {
+            ctx.beginPath();
+            ctx.moveTo(particles[i].x, particles[i].y);
+            ctx.lineTo(particles[j].x, particles[j].y);
+            ctx.strokeStyle = `rgba(255, 255, 255, ${(1 - dist / maxConnectDist) * threadAlpha})`;
+            ctx.lineWidth = 0.5;
+            ctx.stroke();
+          }
+        }
+      }
+
+      particles.forEach(p => {
+        p.update();
+        p.draw();
+      });
+
+      requestAnimationFrame(animate);
+    }
+
+    animate();
+
+    // --- Tab Switching ---
+    function switchAuthMode(mode) {
+      if (currentAuthMode === mode) return;
+      currentAuthMode = mode;
+
+      const indicator = document.getElementById('tabIndicator');
+      const signInBtn = document.getElementById('tabSignInBtn');
+      const signUpBtn = document.getElementById('tabSignUpBtn');
+      const usernameGroup = document.getElementById('usernameGroup');
+      const authUsername = document.getElementById('auth-username');
+      const authEmail = document.getElementById('auth-email');
+      const submitBtnText = document.getElementById('submitBtnText');
+
+      if (mode === 'signin') {
+        indicator.style.transform = 'translateX(0)';
+        signInBtn.classList.add('active');
+        signUpBtn.classList.remove('active');
+
+        usernameGroup.classList.remove('expanded');
+        authUsername.removeAttribute('required');
+        authEmail.placeholder = 'Email or Username';
+
+        submitBtnText.style.opacity = '0';
+        setTimeout(() => {
+          submitBtnText.textContent = 'Continue to ASTRX';
+          submitBtnText.style.opacity = '1';
+        }, 150);
+
+      } else {
+        indicator.style.transform = 'translateX(100%)';
+        signUpBtn.classList.add('active');
+        signInBtn.classList.remove('active');
+
+        usernameGroup.classList.add('expanded');
+        authUsername.setAttribute('required', 'true');
+        authEmail.placeholder = 'Email Address';
+
+        submitBtnText.style.opacity = '0';
+        setTimeout(() => {
+          submitBtnText.textContent = 'Create Account';
+          submitBtnText.style.opacity = '1';
+        }, 150);
+      }
+    }
+
+    function fillTestCredentials() {
+      document.getElementById('auth-email').value = 'admin@astrx.ai';
+      document.getElementById('auth-password').value = 'astrx2026';
+      if (document.getElementById('auth-username')) {
+        document.getElementById('auth-username').value = 'sounak';
+      }
+    }
+
+    // --- Password Visibility Toggle ---
+    function togglePasswordVisibility(inputId, btn) {
+      const input = document.getElementById(inputId);
+      const isPassword = input.type === 'password';
+      input.type = isPassword ? 'text' : 'password';
+
+      btn.innerHTML = isPassword 
+        ? `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/><line x1="2" x2="22" y1="2" y2="22"/></svg>`
+        : `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>`;
+    }
+
+    // --- Authentication Success & Final Locked Logo Sequence ---
+    function handleAuthSubmit(e) {
+      e.preventDefault();
+      const submitBtn = document.getElementById('submitBtn');
+      const submitBtnText = document.getElementById('submitBtnText');
+      const mainContainer = document.getElementById('mainContainer');
+      const enterStage = document.getElementById('enterStage');
+      const ambientGlow = document.getElementById('ambientGlow');
+
+      submitBtn.disabled = true;
+      submitBtnText.textContent = 'Authenticating...';
+
+      setTimeout(() => {
+        mainContainer.classList.add('dissolved');
+        ambientGlow.classList.add('expanded');
+
+        isFinalLockedState = true;
+
+        setTimeout(() => {
+          enterStage.classList.add('visible');
+        }, 1200);
+
+      }, 700);
+    }
+
+    function handleSocialAuth(provider) {
+      const mainContainer = document.getElementById('mainContainer');
+      const enterStage = document.getElementById('enterStage');
+      const ambientGlow = document.getElementById('ambientGlow');
+
+      mainContainer.classList.add('dissolved');
+      ambientGlow.classList.add('expanded');
+      isFinalLockedState = true;
+
+      setTimeout(() => {
+        enterStage.classList.add('visible');
+      }, 1200);
+    }
+
+    function handleEnterAstrx() {
+      const enterStage = document.getElementById('enterStage');
+      enterStage.style.transform = 'translateX(-50%) scale(0.95)';
+      enterStage.style.opacity = '0';
+      
+      setTimeout(() => {
+        window.location.href = "http://localhost:8000";
+      }, 350);
+    }
+  </script>
+</body>
+</html>

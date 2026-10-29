@@ -1,0 +1,241 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --font-serif: 'Instrument Serif', serif;
+    --font-mono: 'Victor Mono', monospace;
+    --sat: env(safe-area-inset-top, 0px);
+    --sar: env(safe-area-inset-right, 0px);
+    --sab: env(safe-area-inset-bottom, 0px);
+    --sal: env(safe-area-inset-left, 0px);
+  }
+}
+
+html, body, #root {
+  width: 100%;
+  height: 100%;
+  height: 100dvh;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  font-family: 'Victor Mono', monospace;
+  background-color: #050B14;
+  color: #e2e8f0;
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+  -webkit-overflow-scrolling: touch;
+  touch-action: manipulation;
+}
+
+body, button, input, textarea, select, span, p, h1, h2, h3, h4, h5, h6, a, div, pre, code {
+  font-family: 'Victor Mono', monospace;
+}
+
+.pt-safe {
+  padding-top: max(env(safe-area-inset-top, 0px), 0px);
+}
+
+.pb-safe {
+  padding-bottom: max(env(safe-area-inset-bottom, 0px), 0px);
+}
+
+.font-instrument {
+  font-family: 'Instrument Serif', Georgia, serif !important;
+}
+
+.font-victor {
+  font-family: 'Victor Mono', monospace !important;
+}
+
+/* Custom glassmorphism utilities */
+.glass-panel {
+  background: rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.glass-pill {
+  background: rgba(255, 255, 255, 0.07);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.glass-sidebar {
+  background: rgba(7, 13, 24, 0.94);
+  backdrop-filter: blur(32px);
+  -webkit-backdrop-filter: blur(32px);
+  border-right: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+/* Specific ASTRX Title Text Gradients (Guaranteed to never render as solid boxes) */
+.astrx-hero-title {
+  font-family: 'Instrument Serif', Georgia, serif !important;
+  display: inline-block;
+  background: linear-gradient(90deg, #505050 0%, #FFFFFF 52%, #CCCCCC 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+
+.astrx-hero-title-light {
+  font-family: 'Instrument Serif', Georgia, serif !important;
+  display: inline-block;
+  background: linear-gradient(90deg, #09090b 0%, #27272a 45%, #52525b 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+
+.astrx-sidebar-title {
+  font-family: 'Instrument Serif', Georgia, serif !important;
+  display: inline-block;
+  background: linear-gradient(90deg, #606060 0%, #FFFFFF 55%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+
+.astrx-sidebar-title-light {
+  font-family: 'Instrument Serif', Georgia, serif !important;
+  display: inline-block;
+  background: linear-gradient(90deg, #09090b 0%, #3f3f46 60%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+
+/* Light Mode Whitewashed Aesthetic & Contrast */
+.light-mode {
+  background-color: #f8fafc;
+  color: #0f172a;
+}
+
+.light-mode .glass-panel {
+  background: rgba(255, 255, 255, 0.88);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  box-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.05);
+}
+
+.light-mode .glass-pill {
+  background: rgba(255, 255, 255, 0.90);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.04);
+}
+
+.light-mode .glass-sidebar {
+  background: rgba(255, 255, 255, 0.94);
+  backdrop-filter: blur(32px);
+  -webkit-backdrop-filter: blur(32px);
+  border-right: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+/* Custom scrollbars: edge-aligned, auto-fading */
+.scrollbar-edge {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+  transition: scrollbar-color 0.3s ease;
+}
+
+.scrollbar-edge:hover,
+.scrollbar-edge:active,
+.scrollbar-edge:focus {
+  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+}
+
+.light-mode .scrollbar-edge:hover,
+.light-mode .scrollbar-edge:active,
+.light-mode .scrollbar-edge:focus {
+  scrollbar-color: rgba(0, 0, 0, 0.2) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 9999px;
+  transition: background 0.3s ease;
+}
+*:hover::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+}
+.light-mode *:hover::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.15);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+.light-mode ::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.3);
+}
+
+/* Metallic Text Gradients */
+.gold-silver-gradient {
+  background: linear-gradient(135deg, #d4af37 0%, #fef3c7 25%, #e2e8f0 60%, #cbd5e1 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.gold-gradient-text {
+  background: linear-gradient(135deg, #e6c875 0%, #b89130 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.silver-gradient-text {
+  background: linear-gradient(180deg, #ffffff 0%, #cbd5e1 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+/* Subtle breathing & flare animations */
+@keyframes ambientFlare {
+  0%, 100% {
+    opacity: 0.85;
+    transform: scale(1) rotate(0deg);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.04) rotate(0.5deg);
+  }
+}
+
+.animate-ambient-flare {
+  animation: ambientFlare 14s ease-in-out infinite alternate;
+}
+
+@keyframes pulseGlow {
+  0%, 100% {
+    box-shadow: 0 0 25px rgba(212, 175, 55, 0.15), inset 0 0 15px rgba(255, 255, 255, 0.05);
+  }
+  50% {
+    box-shadow: 0 0 45px rgba(212, 175, 55, 0.3), inset 0 0 25px rgba(255, 255, 255, 0.1);
+  }
+}
+
+.animate-pulse-glow {
+  animation: pulseGlow 4s ease-in-out infinite;
+}
+
+@keyframes spinSlow {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.animate-spin-slow {
+  animation: spinSlow 8s linear infinite;
+}
