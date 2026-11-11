@@ -437,7 +437,23 @@ def get_tokens_status(
 
 
 @app.get("/", response_class=FileResponse)
-def index() -> FileResponse:
+def index(request: Request) -> FileResponse:
+    target_file = STATIC_DIR / "landing.html"
+    if request.query_params.get("app") == "true" or not target_file.exists():
+        target_file = STATIC_DIR / "index.html"
+    return FileResponse(
+        target_file,
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
+
+
+@app.get("/app", response_class=FileResponse)
+@app.get("/chat", response_class=FileResponse)
+def app_view() -> FileResponse:
     return FileResponse(
         STATIC_DIR / "index.html",
         headers={
