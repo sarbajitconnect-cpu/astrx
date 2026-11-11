@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
-from typing import Generator
+from typing import Generator, Optional
 
 from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text, create_engine, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
@@ -32,12 +32,18 @@ class User(Base):
     __tablename__ = "users"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
-    username: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
-    phone: Mapped[str | None] = mapped_column(String(30), nullable=True, index=True)
+    username: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
+    phone: Mapped[Optional[str]] = mapped_column(String(30), nullable=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(255), default="")
-    otp: Mapped[str | None] = mapped_column(String(10), nullable=True)
-    otp_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    otp: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    otp_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     role: Mapped[str] = mapped_column(String(20), default="user", index=True)
+    password_reset_token: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
+    password_reset_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    google_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
+    failed_login_attempts: Mapped[int] = mapped_column(Integer, default=0)
+    locked_until: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    token_version: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
 
 
@@ -106,7 +112,7 @@ class QueryEvent(Base):
     __tablename__ = "query_events"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
-    document_id: Mapped[str | None] = mapped_column(ForeignKey("documents.id"), nullable=True, index=True)
+    document_id: Mapped[Optional[str]] = mapped_column(ForeignKey("documents.id"), nullable=True, index=True)
     query: Mapped[str] = mapped_column(Text)
     rewritten_query: Mapped[str] = mapped_column(Text)
     answer: Mapped[str] = mapped_column(Text)
@@ -138,6 +144,28 @@ class QueryEvent(Base):
         }
 
 
+class DailyUsage(Base):
+    __tablename__ = "daily_usage"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    identifier: Mapped[str] = mapped_column(String(128), index=True)
+    usage_date: Mapped[str] = mapped_column(String(10), index=True)
+    tokens_used: Mapped[int] = mapped_column(Integer, default=0)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        Index("ix_daily_usage_id_date", "identifier", "usage_date", unique=True),
+    )
+
+    def public(self) -> dict:
+        return {
+            "id": self.id,
+            "identifier": self.identifier,
+            "usage_date": self.usage_date,
+            "tokens_used": self.tokens_used,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else "",
+        }
+
+
 def initialize_database() -> None:
     Base.metadata.create_all(bind=engine)
     # Ensure any missing columns from older SQLite database versions are gracefully migrated
@@ -147,6 +175,12 @@ def initialize_database() -> None:
             "ALTER TABLE users ADD COLUMN phone VARCHAR(30)",
             "ALTER TABLE users ADD COLUMN otp VARCHAR(10)",
             "ALTER TABLE users ADD COLUMN otp_expires_at DATETIME",
+            "ALTER TABLE users ADD COLUMN password_reset_token VARCHAR(128)",
+            "ALTER TABLE users ADD COLUMN password_reset_expires_at DATETIME",
+            "ALTER TABLE users ADD COLUMN google_id VARCHAR(128)",
+            "ALTER TABLE users ADD COLUMN failed_login_attempts INTEGER DEFAULT 0",
+            "ALTER TABLE users ADD COLUMN locked_until DATETIME",
+            "ALTER TABLE users ADD COLUMN token_version INTEGER DEFAULT 1",
             "ALTER TABLE conversations ADD COLUMN chat_type VARCHAR(20) DEFAULT 'normal'",
         ]:
             try:
@@ -154,15 +188,6 @@ def initialize_database() -> None:
                 conn.commit()
             except Exception:
                 pass
-    with SessionLocal() as db:
-        anon = db.get(User, "anonymous")
-        if not anon:
-            anon = User(id="anonymous", email="guest@astrx.ai", username="guest", role="user")
-            db.add(anon)
-            try:
-                db.commit()
-            except Exception:
-                db.rollback()
 
 
 def get_db() -> Generator:

@@ -56,11 +56,33 @@ export default function App() {
     return {
       username: 'Astrx User',
       email: 'user@astrxai.com',
-      queryLimit: 50,
+      queryLimit: 20,
       queriesUsed: 0,
       createdAt: new Date().toISOString()
     };
   });
+
+  // Sync server-side rate limits & usage tracking
+  useEffect(() => {
+    const fetchServerUsage = async () => {
+      try {
+        const res = await fetch('/api/backend/api/usage');
+        if (res.ok) {
+          const usageData = await res.json();
+          setUser(prev => ({ ...prev, usage: usageData, queryLimit: usageData.limit || 20 }));
+        }
+      } catch {}
+    };
+    fetchServerUsage();
+
+    const handleUsageSync = (e) => {
+      if (e.detail) {
+        setUser(prev => ({ ...prev, usage: e.detail }));
+      }
+    };
+    window.addEventListener('astra_usage_updated', handleUsageSync);
+    return () => window.removeEventListener('astra_usage_updated', handleUsageSync);
+  }, []);
 
   useEffect(() => {
     try {
@@ -260,6 +282,7 @@ export default function App() {
 
     const attachmentData = fileAttachment
       ? {
+          file: fileAttachment.file,
           name: fileAttachment.name,
           type: fileAttachment.type,
           size: fileAttachment.size,
@@ -452,7 +475,9 @@ export default function App() {
           text, 
           selectedModel.name, 
           webSearchActive, 
-          attachmentData
+          attachmentData,
+          'core',
+          'temp-session'
         );
         
         setTempConversation(prev => ({
@@ -561,14 +586,17 @@ export default function App() {
       }));
     }
 
-    // Fetch real live AI response with complete history continuity
+    // Fetch real live AI response with complete history continuity and mode isolation
     try {
+      const currentMode = activeTab === 'code' ? 'code' : activeTab === 'study' ? 'study' : activeTab === 'assets' ? 'assets' : 'core';
       const reply = await askGroqAI(
         priorHistory, 
         text, 
         selectedModel.name, 
         webSearchActive, 
-        attachmentData
+        attachmentData,
+        currentMode,
+        targetChatId
       );
 
       setConversations(prev => prev.map(c => {
@@ -689,12 +717,15 @@ export default function App() {
     }));
 
     try {
+      const currentMode = activeTab === 'code' ? 'code' : activeTab === 'study' ? 'study' : activeTab === 'assets' ? 'assets' : 'core';
       const reply = await askGroqAI(
         history, 
         priorUserMsg.text, 
         selectedModel.name, 
         webSearchActive, 
-        priorUserMsg.attachment
+        priorUserMsg.attachment,
+        currentMode,
+        currentChatId
       );
 
       setConversations(prev => prev.map(c => {

@@ -13,7 +13,7 @@
     <link rel="apple-touch-icon" href="/static/favicon-192x192.png">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Open+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
     <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
@@ -21,41 +21,9 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
-    <link rel="stylesheet" href="/static/style.css?v=2260">
-    <script>
-      // Disable Right-Click Context Menu
-      document.addEventListener('contextmenu', (e) => {
-        e.preventDefault();
-        return false;
-      }, true);
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js">
+    <link rel="stylesheet" href="/static/style.css?v=3065">
 
-      // Disable DevTools & View Source Keyboard Shortcuts
-      document.addEventListener('keydown', (e) => {
-        // F12 key
-        if (e.key === 'F12' || e.keyCode === 123) {
-          e.preventDefault();
-          e.stopPropagation();
-          return false;
-        }
-
-        const isCtrl = e.ctrlKey || e.metaKey;
-
-        // Ctrl+Shift+I (Inspect), Ctrl+Shift+J (Console), Ctrl+Shift+C (Element picker)
-        if (isCtrl && e.shiftKey && ['I', 'J', 'C', 'i', 'j', 'c'].includes(e.key)) {
-          e.preventDefault();
-          e.stopPropagation();
-          return false;
-        }
-
-        // Ctrl+U (View Page Source), Ctrl+S (Save Page)
-        if (isCtrl && ['u', 'U', 's', 'S'].includes(e.key)) {
-          e.preventDefault();
-          e.stopPropagation();
-          return false;
-        }
-      }, true);
-    </script>
   </head>
   <body>
     <!-- Fluid Silk Wave Background Wallpaper -->
@@ -68,13 +36,22 @@
 
       <!-- Collapsed Sidebar Glass Rail (100% Matching Mockup) -->
       <nav id="sidebarRail" class="sidebar-rail hidden" aria-label="Collapsed sidebar">
-        <!-- Top Button: Expand Sidebar -->
-        <button type="button" id="railExpandBtn" class="rail-icon-btn" title="Open Sidebar" aria-label="Open sidebar">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="3" y="3" width="18" height="18" rx="4" ry="4"></rect>
-            <line x1="9" y1="3" x2="9" y2="21"></line>
-          </svg>
-        </button>
+        <div class="rail-top-group">
+          <!-- Top Button: Expand Sidebar -->
+          <button type="button" id="railExpandBtn" class="rail-icon-btn" title="Open Sidebar" aria-label="Open sidebar">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="3" width="18" height="18" rx="4" ry="4"></rect>
+              <line x1="9" y1="3" x2="9" y2="21"></line>
+            </svg>
+          </button>
+
+          <!-- New Conversation Button in Collapsed Rail -->
+          <button type="button" id="railNewChatBtn" class="rail-icon-btn" title="New Conversation" aria-label="New conversation">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 5v14M5 12h14"></path>
+            </svg>
+          </button>
+        </div>
 
         <!-- Bottom Button: User Account / Login Button -->
         <button type="button" id="railUserBtn" class="rail-icon-btn" title="Account / Login" aria-label="Account login">
@@ -130,7 +107,7 @@
 
         <!-- Upload Files Box (Dashed Outline) -->
         <label id="uploadDrop" class="upload-dashed-card">
-          <input id="fileInput" type="file" multiple accept=".pdf,.txt,.md,.csv,.json,.py,.html,.docx" style="display: none;">
+          <input id="fileInput" type="file" multiple accept=".pdf,.txt,.md,.csv,.json,.py,.html,.docx,.zip" style="display: none;">
           <div class="upload-red-circle">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#e05252" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
               <line x1="12" y1="19" x2="12" y2="5"></line>
@@ -138,7 +115,7 @@
             </svg>
           </div>
           <span class="upload-main-text">UPLOAD FILES HERE</span>
-          <span class="upload-sub-text">PDF, TXT, DOC etc.</span>
+          <span class="upload-sub-text">PDF, TXT, DOC, ZIP (max 400 MB)</span>
         </label>
 
         <!-- Uploaded Documents Section -->
@@ -190,22 +167,29 @@
           <div class="mobile-nav-center">
             <span class="mobile-nav-brand">ASTRA</span>
           </div>
-          <button type="button" id="mobileNewChatBtn" class="mobile-nav-icon-btn" title="New Conversation" aria-label="New conversation">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M12 5v14M5 12h14"/>
-            </svg>
-          </button>
+          <div class="mobile-nav-right">
+            <button type="button" id="mobileNewChatBtn" class="mobile-nav-icon-btn" title="New Conversation" aria-label="New conversation">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 5v14M5 12h14"/>
+              </svg>
+            </button>
+            <button type="button" id="mobileUserAuthBtn" class="mobile-nav-icon-btn mobile-user-btn" title="Login / Account" aria-label="Login or user profile">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                <circle cx="12" cy="7" r="4"></circle>
+              </svg>
+            </button>
+          </div>
         </header>
 
-        <!-- Hidden status and admin portal buttons preserved for health & admin navigation -->
         <div class="top-nav-mini">
           <div id="serviceStatus" class="mini-status-dot ok" title="System Ready">
             <span class="dot"></span>
             <span id="statusText" style="display:none;">Ready</span>
           </div>
-          <a href="/admin" class="mini-admin-link" title="Admin Portal">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-          </a>
+          <div id="tokenBadge" class="token-quota-badge" title="Daily tokens remaining">
+            <span id="tokenBadgeText">Tokens: Loading...</span>
+          </div>
         </div>
 
         <!-- Central Container -->
@@ -220,6 +204,18 @@
           <!-- Messages Stream (when active conversations happen) -->
           <section id="messages" class="messages-stream" aria-live="polite"></section>
 
+          <!-- Out of Tokens Main Page Alert Card -->
+          <div id="outOfTokensBanner" class="out-of-tokens-card hidden" role="alert">
+            <div class="out-of-tokens-content">
+              <div class="out-of-tokens-badge-icon">!</div>
+              <div class="out-of-tokens-details">
+                <strong id="outOfTokensTitle" class="out-of-tokens-title">Out of Tokens</strong>
+                <p id="outOfTokensMsg" class="out-of-tokens-msg">You have used all your tokens for today.</p>
+              </div>
+              <button type="button" id="outOfTokensActionBtn" class="out-of-tokens-btn hidden">Log In for 20 Tokens</button>
+            </div>
+          </div>
+
           <!-- Floating Composer Card (100% Matching Mockup) -->
           <form id="chatForm" class="composer-outer-form">
             <div class="composer-floating-card">
@@ -233,6 +229,13 @@
                 </span>
                 <span id="activeDocName" class="active-doc-text">Document</span>
                 <button type="button" id="removeActiveDocBtn" class="remove-doc-tag-btn" title="Remove document focus" aria-label="Remove document focus">✕</button>
+              </div>
+
+              <!-- Attached Image Preview Chip in Composer -->
+              <div id="composerImagePreview" class="composer-img-chip hidden">
+                <img id="composerImageThumb" src="" alt="Thumbnail" class="composer-img-thumb" />
+                <span id="composerImageLabel" class="composer-img-label">Photo</span>
+                <button type="button" id="removeImageBtn" class="remove-img-chip-btn" title="Remove photo" aria-label="Remove photo">✕</button>
               </div>
 
               <!-- Recessed Capsule Input Area matching screenshot (Type here) -->
@@ -258,7 +261,19 @@
                       </span>
                       <div class="attach-menu-info">
                         <strong>Upload Document</strong>
-                        <small>PDF, DOCX, TXT, MD</small>
+                        <small>PDF, DOCX, XLSX, PPTX, Images, Code</small>
+                      </div>
+                    </button>
+                    <button type="button" id="actionCamera" class="attach-menu-item">
+                      <span class="attach-menu-icon" style="background: rgba(16, 185, 129, 0.15);">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                          <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
+                          <circle cx="12" cy="13" r="4"></circle>
+                        </svg>
+                      </span>
+                      <div class="attach-menu-info">
+                        <strong>Take Photograph</strong>
+                        <small>Camera / Visual Solve</small>
                       </div>
                     </button>
                     <button type="button" id="actionVoiceSearch" class="attach-menu-item">
@@ -276,6 +291,14 @@
                     </button>
                   </div>
                 </div>
+
+                <!-- Camera Button directly in capsule -->
+                <button type="button" id="composerCameraBtn" class="capsule-squircle-btn camera-btn" title="Open Camera / Photograph" aria-label="Open Camera or Photograph">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
+                    <circle cx="12" cy="13" r="4"></circle>
+                  </svg>
+                </button>
 
                 <textarea id="message" rows="1" maxlength="10000" placeholder="Type here" autocomplete="off"></textarea>
 
@@ -355,44 +378,61 @@
                       <!-- Row 3: Astracore O (Coming Soon) -->
                       <div class="popover-row popover-option-row coming-soon-row" id="popoverModelAstracoreO" role="menuitem" style="opacity: 0.75; cursor: default;">
                         <span class="popover-row-label">Astracore O</span>
-                        <span class="coming-soon-badge" style="font-family: 'Instrument Serif', Georgia, serif; font-size: 13px; font-weight: 600; color: #64748b; background: rgba(0, 0, 0, 0.06); padding: 2px 8px; border-radius: 12px; letter-spacing: 0.5px;">COMING SOON</span>
+                        <span class="coming-soon-badge" style="font-family: 'Open Sans', sans-serif; font-size: 12px; font-weight: 400; color: #64748b; background: rgba(0, 0, 0, 0.06); padding: 2px 8px; border-radius: 12px; letter-spacing: 0.5px;">COMING SOON</span>
                       </div>
 
                       <!-- Divider line -->
                       <hr class="popover-divider">
 
-                      <!-- Row 3: Quick (Simple mode) -->
+                      <!-- Row 4: Quick (Simple mode) -->
                       <div class="popover-row popover-option-row active" id="popoverModeQuick" role="menuitem">
                         <span class="popover-row-label">Quick</span>
                         <span class="popover-check-icon" id="popoverQuickCheck">✓</span>
                       </div>
 
-                      <!-- Row 4: Extended (Detailed mode) -->
+                      <!-- Row 5: Extended (Detailed mode) -->
                       <div class="popover-row popover-option-row" id="popoverModeExtended" role="menuitem">
                         <span class="popover-row-label">Extended</span>
                         <span class="popover-check-icon hidden" id="popoverExtendedCheck">✓</span>
                       </div>
 
-                      <!-- Row 5: Code -->
+                      <!-- Row 6: Code Mode (Explicit programming assistance mode) -->
                       <div class="popover-row popover-option-row" id="popoverModeCode" role="menuitem">
-                        <span class="popover-row-label">Code</span>
+                        <span class="popover-row-label">Code Mode</span>
                         <span class="popover-check-icon hidden" id="popoverCodeCheck">✓</span>
                       </div>
                     </div>
 
-                    <button type="button" id="engineToggleBtn" class="model-spec-toggle-btn" title="Model & Chat Mode Options" aria-haspopup="true" aria-expanded="false">
+                    <button type="button" id="engineToggleBtn" class="model-spec-toggle-btn" title="Model & Chat Mode Options (Live Web Active)" aria-haspopup="true" aria-expanded="false">
                       <span id="engineLabel" class="model-spec-label">Astracore 3.1</span>
+                      <span id="liveWebIndicator" class="live-web-dot" title="Live Internet & Real-Time Intelligence Active"></span>
                     </button>
                   </div>
 
                   <!-- Microphone Button beside Send Button on Homescreen -->
-                  <button type="button" id="composerHomeMicBtn" class="capsule-mic-btn composer-home-mic-btn" title="Voice Dictation" aria-label="Voice dictation">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                      <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"></path>
-                      <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
-                      <line x1="12" y1="19" x2="12" y2="22"></line>
-                    </svg>
-                  </button>
+                  <div id="composerHomeMicPill" class="voice-search-pill home-voice-pill">
+                    <div id="composerHomeVoiceWaveform" class="voice-wave-container hidden">
+                      <span class="wave-bar"></span>
+                      <span class="wave-bar"></span>
+                      <span class="wave-bar"></span>
+                      <span class="wave-bar"></span>
+                      <span class="wave-bar"></span>
+                      <span class="wave-bar"></span>
+                      <span class="wave-bar"></span>
+                      <span class="wave-bar"></span>
+                      <span class="wave-bar"></span>
+                      <span class="wave-bar"></span>
+                      <span class="wave-bar"></span>
+                      <span class="wave-bar"></span>
+                    </div>
+                    <button type="button" id="composerHomeMicBtn" class="capsule-mic-btn composer-home-mic-btn" title="Voice Dictation" aria-label="Voice dictation">
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"></path>
+                        <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                        <line x1="12" y1="19" x2="12" y2="22"></line>
+                      </svg>
+                    </button>
+                  </div>
 
                   <!-- Homescreen Send Button (Squircle) -->
                   <button type="button" id="composerHomeSendBtn" class="capsule-squircle-btn send-btn composer-home-send-btn" aria-label="Send query" title="Send query">
@@ -409,16 +449,17 @@
       </main>
     </div>
 
-    <!-- User Sign In / Register Modal with 2-digit Math Calculation -->
+    <!-- User Sign In / Register Modal with 2-digit Math Calculation & Optional Sync -->
     <div id="authModal" class="modal hidden" role="dialog" aria-modal="true" aria-label="Sign In">
       <div class="glass-modal-card">
         <div class="modal-header">
           <div>
             <span class="modal-brand-title">ASTRA</span>
-            <p class="modal-eyebrow" id="authEyebrow">SECURE ACCESS</p>
+            <p class="modal-eyebrow" id="authEyebrow">SECURE WORKSPACE</p>
             <h2 id="authHeading" class="modal-h2">Account Login</h2>
+            <p id="authSubtitle" style="font-size: 13.5px; color: #94a3b8; margin-top: 4px; line-height: 1.4;">Sign in to sync your conversations across devices, or continue as guest.</p>
           </div>
-          <button id="closeAuthModal" class="close-icon-btn">✕</button>
+          <button id="closeAuthModal" class="close-icon-btn" title="Close">✕</button>
         </div>
 
         <div class="modal-tabs">
@@ -426,22 +467,36 @@
           <button class="modal-tab" data-mode="signup">Register</button>
         </div>
 
-        <!-- Login Form with 2-digit Math Challenge -->
-        <form id="loginForm" class="auth-modal-form">
+        <!-- Login Form with Password + 2-digit Math Challenge -->
+        <form id="loginForm" class="auth-modal-form" autocomplete="off">
           <label>Phone Number, Email, or Username
-            <input id="loginIdentifier" type="text" required autocomplete="username" placeholder="e.g. user@example.com">
+            <input id="loginIdentifier" type="text" required autocomplete="off" placeholder="Phone number, email, or username">
           </label>
+
+          <label>Password
+            <div class="password-input-wrapper">
+              <input id="loginPassword" type="password" required autocomplete="new-password" placeholder="Enter your password">
+              <button type="button" class="pwd-toggle-btn" id="toggleLoginPasswordBtn" title="Show/Hide Password" aria-label="Toggle password visibility">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+              </button>
+            </div>
+          </label>
+          <div class="auth-extra-row">
+            <button type="button" id="forgotPasswordLinkBtn" class="link-btn">Forgot password?</button>
+          </div>
           
           <div class="math-challenge-box">
             <div class="math-challenge-header">
-              <span class="math-title">🧮 CALCULATION VERIFICATION</span>
-              <button type="button" id="loginRefreshChallengeBtn" class="refresh-math-btn" title="Get new calculation">🔄</button>
+              <span class="math-title">CALCULATION VERIFICATION</span>
+              <button type="button" id="loginRefreshChallengeBtn" class="refresh-math-btn" title="Get new calculation">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
+              </button>
             </div>
             <div id="loginMathQuestion" class="math-question-text">
               Loading math problem…
             </div>
             <label style="margin-top: 8px; margin-bottom: 0;">Your Answer
-              <input id="loginMathAnswer" type="number" required placeholder="Calculate and enter the result">
+              <input id="loginMathAnswer" type="number" required autocomplete="off" placeholder="Calculate and enter the result">
             </label>
             <p class="math-hint">Calculate between the two numbers to verify and login.</p>
           </div>
@@ -449,25 +504,27 @@
           <button type="submit" class="modal-primary-btn" id="loginSubmitBtn">Verify & Login</button>
         </form>
 
-        <!-- Register Form with 2-digit Math Challenge -->
-        <form id="signupForm" class="auth-modal-form hidden">
+        <!-- Register Form with 2-digit Math Challenge & Legal Consent -->
+        <form id="signupForm" class="auth-modal-form hidden" autocomplete="off">
           <label>Username
-            <input id="signupUsername" type="text" required placeholder="Choose a username">
+            <input id="signupUsername" type="text" required autocomplete="off" placeholder="Choose a username">
           </label>
           <label>Email Address
-            <input id="signupEmail" type="email" required autocomplete="email" placeholder="you@company.com">
+            <input id="signupEmail" type="email" required autocomplete="off" placeholder="you@company.com">
           </label>
-          <label>Phone Number (Optional)
-            <input id="signupPhone" type="tel" placeholder="+1 555-0199">
+          <label>Phone Number (e.g. +91 or 10 digits)
+            <input id="signupPhone" type="tel" autocomplete="off" placeholder="Enter 10-digit mobile or phone number">
           </label>
           <label>Password
-            <input id="signupPassword" type="password" minlength="6" required placeholder="Create a password">
+            <input id="signupPassword" type="password" minlength="8" required autocomplete="new-password" placeholder="At least 8 chars with letters & numbers">
           </label>
 
           <div class="math-challenge-box">
             <div class="math-challenge-header">
-              <span class="math-title">🧮 CALCULATION VERIFICATION</span>
-              <button type="button" id="signupRefreshChallengeBtn" class="refresh-math-btn" title="Get new calculation">🔄</button>
+              <span class="math-title">CALCULATION VERIFICATION</span>
+              <button type="button" id="signupRefreshChallengeBtn" class="refresh-math-btn" title="Get new calculation">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
+              </button>
             </div>
             <div id="signupMathQuestion" class="math-question-text">
               Loading math problem…
@@ -476,6 +533,14 @@
               <input id="signupMathAnswer" type="number" required placeholder="Calculate and enter the result">
             </label>
             <p class="math-hint">Calculate between the two numbers to verify and register.</p>
+          </div>
+
+          <!-- Legal Consent Checkbox (Unchecked by default) -->
+          <div class="legal-consent-box" style="margin: 14px 0 16px; display: flex; align-items: flex-start; gap: 10px; text-align: left; padding: 10px 12px; background: rgba(0,0,0,0.15); border-radius: 12px; border: 1px solid rgba(255,255,255,0.1);">
+            <input type="checkbox" id="signupTermsConsent" style="margin-top: 2px; width: 16px; height: 16px; cursor: pointer; accent-color: #f472b6;">
+            <label for="signupTermsConsent" style="font-size: 13px; color: #cbd5e1; cursor: pointer; line-height: 1.4; margin: 0; font-weight: normal;">
+              I agree to the <a href="/terms" target="_blank" style="color: #f472b6; text-decoration: underline; font-weight: 600;">Terms & Conditions</a> and <a href="/privacy" target="_blank" style="color: #f472b6; text-decoration: underline; font-weight: 600;">Privacy Policy</a>.
+            </label>
           </div>
 
           <button type="submit" class="modal-primary-btn" id="signupSubmitBtn">Verify & Create Account</button>
@@ -487,6 +552,60 @@
         </div>
       </div>
     </div>
+
+    <!-- Forgot Password Modal -->
+    <div id="forgotPasswordModal" class="modal hidden" role="dialog" aria-modal="true" aria-label="Forgot Password">
+      <div class="glass-modal-card">
+        <div class="modal-header">
+          <div>
+            <span class="modal-brand-title">ASTRA</span>
+            <p class="modal-eyebrow">ACCOUNT RECOVERY</p>
+            <h2 class="modal-h2" id="forgotHeading">Reset Password</h2>
+          </div>
+          <button id="closeForgotModal" class="close-icon-btn" type="button">✕</button>
+        </div>
+
+        <!-- Step 1: Verification & Request Reset Token -->
+        <form id="forgotPasswordForm" class="auth-modal-form">
+          <p class="auth-sub-desc">Enter your account identifier and solve the calculation to verify identity.</p>
+          <label>Phone Number, Email, or Username
+            <input id="forgotIdentifier" type="text" required placeholder="Phone number, email, or username">
+          </label>
+
+          <div class="math-challenge-box">
+            <div class="math-challenge-header">
+              <span class="math-title">CALCULATION VERIFICATION</span>
+              <button type="button" id="forgotRefreshChallengeBtn" class="refresh-math-btn" title="Get new calculation">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
+              </button>
+            </div>
+            <div id="forgotMathQuestion" class="math-question-text">Loading math problem…</div>
+            <label style="margin-top: 8px; margin-bottom: 0;">Your Answer
+              <input id="forgotMathAnswer" type="number" required placeholder="Calculate and enter the result">
+            </label>
+            <p class="math-hint">Calculate between the two numbers to verify ownership.</p>
+          </div>
+
+          <button type="submit" class="modal-primary-btn" id="forgotSubmitBtn">Verify & Proceed</button>
+          <button type="button" id="backToLoginFromForgotBtn" class="modal-secondary-btn" style="margin-top: 8px;">Back to Login</button>
+        </form>
+
+        <!-- Step 2: Enter New Password -->
+        <form id="resetPasswordForm" class="auth-modal-form hidden">
+          <p class="auth-sub-desc">Identity verified! Enter your new password below.</p>
+          <input id="resetTokenHidden" type="hidden">
+          <label>New Password
+            <input id="newPasswordInput" type="password" required minlength="8" placeholder="At least 8 chars with letter & number">
+          </label>
+          <label>Confirm New Password
+            <input id="confirmPasswordInput" type="password" required minlength="8" placeholder="Re-enter new password">
+          </label>
+          <div id="resetErrorMsg" class="auth-error-banner hidden"></div>
+          <button type="submit" class="modal-primary-btn" id="resetSubmitBtn">Update Password</button>
+        </form>
+      </div>
+    </div>
+
 
     <!-- Settings & Appearance Modal (Frost Level & Custom Wallpaper) -->
     <div id="settingsModal" class="modal hidden" role="dialog" aria-modal="true" aria-label="Settings">
@@ -504,7 +623,6 @@
           <!-- 1. Glass Frosting Setting -->
           <div class="settings-group">
             <div class="settings-group-header">
-              <span class="settings-group-icon">❄️</span>
               <div class="settings-group-text">
                 <strong class="settings-group-title">Glass Frosting (Blur)</strong>
                 <p class="settings-group-desc">Adjust the frosted blur intensity of the optical glass surfaces.</p>
@@ -523,7 +641,6 @@
           <!-- 2. Custom Background Wallpaper Upload -->
           <div class="settings-group">
             <div class="settings-group-header">
-              <span class="settings-group-icon">🖼️</span>
               <div class="settings-group-text">
                 <strong class="settings-group-title">Custom Wallpaper Background</strong>
                 <p class="settings-group-desc">Upload your own background image from your device.</p>
@@ -532,29 +649,13 @@
             <div class="custom-bg-controls">
               <input type="file" id="customBgFileInput" accept="image/*" style="display: none;">
               <button type="button" id="uploadBgBtn" class="settings-btn primary-glass-btn">
-                <span>📁</span> Upload Image from Device
+                Upload Image from Device
               </button>
               <button type="button" id="resetBgBtn" class="settings-btn secondary-glass-btn">
-                <span>🔄</span> Reset to Default
+                Reset to Default
               </button>
             </div>
             <div id="customBgStatus" class="custom-bg-status-msg">Default fluid wallpaper active</div>
-          </div>
-
-          <!-- 3. Backend Server & API Endpoint Configuration -->
-          <div class="settings-group">
-            <div class="settings-group-header">
-              <span class="settings-group-icon">🌐</span>
-              <div class="settings-group-text">
-                <strong class="settings-group-title">Backend API Endpoint</strong>
-                <p class="settings-group-desc">Connect to Production Cloud or custom LAN/local server.</p>
-              </div>
-            </div>
-            <div style="display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap;">
-              <input type="text" id="apiEndpointInput" placeholder="https://astra-ai-agent-production.up.railway.app" style="flex: 1; min-width: 200px; padding: 8px 12px; border-radius: 12px; border: 1px solid rgba(0,0,0,0.12); background: rgba(255,255,255,0.7); font-family: monospace; font-size: 13px;">
-              <button type="button" id="saveApiEndpointBtn" class="settings-btn primary-glass-btn" style="padding: 8px 14px; font-size: 13px;">Save</button>
-              <button type="button" id="resetApiEndpointBtn" class="settings-btn secondary-glass-btn" style="padding: 8px 14px; font-size: 13px;">Reset</button>
-            </div>
           </div>
         </div>
       </div>
@@ -563,8 +664,7 @@
     <!-- Custom Confirmation Modal for Document Deletion -->
     <div id="deleteConfirmModal" class="modal hidden" role="dialog" aria-modal="true" aria-label="Confirm Deletion">
       <div class="glass-modal-card" style="max-width: 380px; text-align: center;">
-        <div style="font-size: 2rem; margin-bottom: 10px;">🗑️</div>
-        <h3 style="font-family: 'Instrument Serif', Georgia, serif; font-size: 1.35rem; font-weight: 600; margin-bottom: 8px; color: #1e293b;">Remove Document?</h3>
+        <h3 style="font-family: 'Open Sans', sans-serif; font-size: 1.25rem; font-weight: 400; margin-bottom: 8px; color: #1e293b;">Remove Document?</h3>
         <p id="deleteDocNameText" class="delete-confirm-text"></p>
         <div style="display: flex; gap: 12px; justify-content: center; margin-top: 20px;">
           <button id="cancelDeleteBtn" class="modal-secondary-btn" style="flex: 1;">Cancel</button>
@@ -573,9 +673,79 @@
       </div>
     </div>
 
+    <!-- Camera Viewfinder & Snapshot Modal -->
+    <div id="cameraModal" class="modal hidden" role="dialog" aria-modal="true" aria-label="Camera">
+      <div class="glass-modal-card camera-modal-card">
+        <div class="modal-header">
+          <div>
+            <span class="modal-brand-title">ASTRA VISION</span>
+            <p class="modal-eyebrow">MULTIMODAL CAPTURE</p>
+            <h2 class="modal-h2" id="cameraModalTitle">Take Photograph</h2>
+          </div>
+          <button type="button" id="closeCameraModal" class="close-icon-btn" title="Close Camera">✕</button>
+        </div>
+
+        <div class="camera-viewfinder-wrapper">
+          <div class="camera-stream-container">
+            <video id="cameraVideo" autoplay playsinline muted class="camera-video"></video>
+            <canvas id="cameraCanvas" class="camera-canvas hidden"></canvas>
+            <img id="cameraCapturedImg" class="camera-captured-img hidden" alt="Captured photograph" />
+            <div id="cameraOverlayScan" class="camera-overlay-scan"></div>
+            <div id="cameraErrorBanner" class="camera-error-banner hidden">
+              <p id="cameraErrorText">Camera access denied or unavailable.</p>
+              <button type="button" id="cameraFallbackUploadBtn" class="camera-action-btn secondary" style="margin-top: 12px;">
+                Choose Image from Device
+              </button>
+            </div>
+          </div>
+
+          <div class="camera-controls-bar">
+            <!-- Left: Switch Camera (Front/Rear) -->
+            <button type="button" id="cameraSwitchBtn" class="camera-icon-btn" title="Switch Camera" aria-label="Switch Camera">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M20 16v-2a4 4 0 0 0-4-4H4"></path>
+                <polyline points="8 6 4 10 8 14"></polyline>
+                <path d="M4 8v2a4 4 0 0 0 4 4h12"></path>
+                <polyline points="16 18 20 14 16 10"></polyline>
+              </svg>
+            </button>
+
+            <!-- Center: Shutter (Live) or Retake/Confirm (Preview) -->
+            <div id="cameraLiveControls" class="camera-live-actions">
+              <button type="button" id="cameraShutterBtn" class="camera-shutter-btn" title="Take Photo" aria-label="Take Photo">
+                <span class="shutter-inner-ring"></span>
+              </button>
+            </div>
+
+            <div id="cameraReviewControls" class="camera-review-actions hidden">
+              <button type="button" id="cameraRetakeBtn" class="camera-action-btn secondary" title="Retake Photo">
+                Retake
+              </button>
+              <button type="button" id="cameraUsePhotoBtn" class="camera-action-btn primary" title="Use This Photo">
+                Use Photo
+              </button>
+            </div>
+
+            <!-- Right: Direct File Upload Fallback button -->
+            <button type="button" id="cameraUploadFallbackBtn" class="camera-icon-btn" title="Upload from Device" aria-label="Upload from Device">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                <polyline points="21 15 16 10 5 21"></polyline>
+              </svg>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Hidden Camera File Inputs for Fallbacks / Mobile Capture -->
+    <input type="file" id="cameraFileInput" accept="image/*" style="display:none;" />
+    <input type="file" id="cameraNativeCaptureInput" accept="image/*" capture="environment" style="display:none;" />
+
     <!-- Global Toast Notification -->
     <div id="toast" class="toast hidden"></div>
 
-    <script src="/static/app.js?v=2260"></script>
+    <script src="/static/app.js?v=3065"></script>
   </body>
 </html>

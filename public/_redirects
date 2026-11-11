@@ -1,2 +1,4 @@
-/app    /app.html    200
-/login  /login.html  200
+/app    https://astrxai.com/    302!
+/app.html    https://astrxai.com/    302!
+/login  https://astrxai.com/    302!
+/login.html  https://astrxai.com/    302!

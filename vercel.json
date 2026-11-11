@@ -2,8 +2,10 @@
   "framework": "vite",
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
-  "rewrites": [
-    { "source": "/app", "destination": "/app.html" },
-    { "source": "/login", "destination": "/login.html" }
+  "redirects": [
+    { "source": "/app", "destination": "https://astrxai.com/", "permanent": false },
+    { "source": "/app.html", "destination": "https://astrxai.com/", "permanent": false },
+    { "source": "/login", "destination": "https://astrxai.com/", "permanent": false },
+    { "source": "/login.html", "destination": "https://astrxai.com/", "permanent": false }
   ]
 }

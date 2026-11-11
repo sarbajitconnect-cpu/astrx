@@ -3,404 +3,457 @@ import {
   Box, 
   FileText, 
   Image as ImageIcon, 
-  Code2, 
-  Sparkles, 
-  FlaskConical, 
   Trash2, 
   UploadCloud, 
-  ArrowLeft,
-  Search,
-  ExternalLink,
-  Download,
-  X,
-  Check
+  ArrowLeft, 
+  Search, 
+  Send, 
+  Loader2, 
+  Sparkles, 
+  CheckCircle2, 
+  AlertCircle,
+  FileSpreadsheet,
+  FileCode,
+  FileQuestion,
+  Eye,
+  X
 } from 'lucide-react';
-import { processUploadedFile } from '../utils/fileReader';
-
-const DEFAULT_ASSETS = [
-  { 
-    id: 'asset-1', 
-    name: 'Deep_Ocean_Ecology_Report.pdf', 
-    type: 'doc', 
-    size: '2.4 MB', 
-    dateTime: 'Oct 22, 2026 • 02:45 PM', 
-    tag: 'Knowledge Base',
-    category: 'research'
-  },
-  { 
-    id: 'asset-2', 
-    name: 'Astrophysics_EventHorizon_Graph.png', 
-    type: 'image', 
-    size: '4.1 MB', 
-    dateTime: 'Oct 20, 2026 • 11:30 AM', 
-    tag: 'Diagram',
-    category: 'images'
-  },
-  { 
-    id: 'asset-3', 
-    name: 'Quantum_Circuit_Simulator.py', 
-    type: 'code', 
-    size: '18 KB', 
-    dateTime: 'Oct 16, 2026 • 09:15 AM', 
-    tag: 'Script',
-    category: 'code'
-  },
-  { 
-    id: 'asset-4', 
-    name: 'Memory_Pawnshop_Script_Draft.md', 
-    type: 'doc', 
-    size: '45 KB', 
-    dateTime: 'Oct 10, 2026 • 04:20 PM', 
-    tag: 'Screenplay',
-    category: 'documents'
-  },
-  { 
-    id: 'asset-5', 
-    name: 'Cosmic_Web_Neural_Synthesis.png', 
-    type: 'generated', 
-    size: '3.8 MB', 
-    dateTime: 'Oct 24, 2026 • 01:10 PM', 
-    tag: 'Generated',
-    category: 'generated'
-  },
-  { 
-    id: 'asset-6', 
-    name: 'Synthetic_Intelligence_Convergence_Paper.pdf', 
-    type: 'research', 
-    size: '5.2 MB', 
-    dateTime: 'Oct 23, 2026 • 06:05 PM', 
-    tag: 'Research',
-    category: 'research'
-  }
-];
+import { askGroqAI } from '../utils/aiResponse';
 
 export default function AssetsArchive({ onBackToChat }) {
-  const [assets, setAssets] = useState(() => {
-    try {
-      const saved = localStorage.getItem('astrx_assets');
-      return saved ? JSON.parse(saved) : DEFAULT_ASSETS;
-    } catch {
-      return DEFAULT_ASSETS;
-    }
-  });
-
+  const [documents, setDocuments] = useState([]);
+  const [isLoadingDocs, setIsLoadingDocs] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
-  const [activeFilter, setActiveFilter] = useState('all');
-  const [previewAsset, setPreviewAsset] = useState(null);
+  const [uploadStatus, setUploadStatus] = useState({ isUploading: false, progress: 0, status: '', fileName: '' });
+  const [selectedDocId, setSelectedDocId] = useState(null); // null means query across all documents
+  const [previewDoc, setPreviewDoc] = useState(null);
+
+  // Document Q&A Chat State
+  const [docQuery, setDocQuery] = useState('');
+  const [isAnswering, setIsAnswering] = useState(false);
+  const [chatHistory, setChatHistory] = useState([]);
   const fileInputRef = useRef(null);
+  const chatScrollRef = useRef(null);
+
+  // Fetch real persistent documents from backend
+  const fetchDocuments = async () => {
+    try {
+      let authHeader = {};
+      try {
+        const user = JSON.parse(localStorage.getItem('astrx_user') || '{}');
+        if (user && user.token) authHeader['Authorization'] = `Bearer ${user.token}`;
+      } catch {}
+
+      const res = await fetch('/api/backend/api/documents', { headers: authHeader });
+      if (res.ok) {
+        const data = await res.json();
+        setDocuments(data.documents || []);
+      }
+    } catch (err) {
+      console.error('Failed to fetch documents:', err);
+    } finally {
+      setIsLoadingDocs(false);
+    }
+  };
 
   useEffect(() => {
-    try {
-      localStorage.setItem('astrx_assets', JSON.stringify(assets));
-    } catch (e) {
-      console.error("Failed to save assets to storage:", e);
-    }
-  }, [assets]);
+    fetchDocuments();
+  }, []);
 
-  const handleFileUpload = async (e) => {
-    const files = e.target.files;
+  useEffect(() => {
+    if (chatScrollRef.current) {
+      chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
+    }
+  }, [chatHistory, isAnswering]);
+
+  // Upload handler with progress simulation
+  const handleUploadFiles = async (files) => {
     if (!files || files.length === 0) return;
 
     for (let i = 0; i < files.length; i++) {
-      const rawFile = files[i];
+      const file = files[i];
+      setUploadStatus({ isUploading: true, progress: 20, status: 'Reading file data...', fileName: file.name });
+
+      const formData = new FormData();
+      formData.append('file', file);
+
       try {
-        const processed = await processUploadedFile(rawFile);
-        const now = new Date();
-        const formattedDate = now.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-        const formattedTime = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+        setUploadStatus({ isUploading: true, progress: 50, status: 'Semantic chunking & BGE embedding...', fileName: file.name });
 
-        let assetType = 'doc';
-        let assetCategory = 'documents';
-        let assetTag = 'Document';
+        let authHeader = {};
+        try {
+          const user = JSON.parse(localStorage.getItem('astrx_user') || '{}');
+          if (user && user.token) authHeader['Authorization'] = `Bearer ${user.token}`;
+        } catch {}
 
-        if (processed.isImage) {
-          assetType = 'image';
-          assetCategory = 'images';
-          assetTag = 'Image';
-        } else if (processed.name.endsWith('.py') || processed.name.endsWith('.js') || processed.name.endsWith('.ts') || processed.name.endsWith('.html')) {
-          assetType = 'code';
-          assetCategory = 'code';
-          assetTag = 'Script';
-        } else if (processed.name.toLowerCase().includes('research') || processed.name.toLowerCase().includes('report') || processed.name.toLowerCase().includes('paper')) {
-          assetType = 'research';
-          assetCategory = 'research';
-          assetTag = 'Research';
+        const res = await fetch('/api/backend/api/upload', {
+          method: 'POST',
+          headers: authHeader,
+          body: formData
+        });
+
+        if (res.ok) {
+          setUploadStatus({ isUploading: true, progress: 100, status: 'Indexed into Qdrant!', fileName: file.name });
+          await fetchDocuments();
+        } else {
+          const err = await res.json().catch(() => ({}));
+          alert(`Upload failed: ${err.detail || 'Unsupported file or error.'}`);
         }
-
-        const sizeStr = processed.size > 1024 * 1024 
-          ? `${(processed.size / (1024 * 1024)).toFixed(1)} MB`
-          : `${Math.max(1, Math.round(processed.size / 1024))} KB`;
-
-        const newAsset = {
-          id: `asset-${Date.now()}-${i}`,
-          name: processed.name,
-          type: assetType,
-          size: sizeStr,
-          dateTime: `${formattedDate} • ${formattedTime}`,
-          tag: assetTag,
-          category: assetCategory,
-          previewUrl: processed.previewUrl || processed.base64Data,
-          content: processed.extractedText || ''
-        };
-
-        setAssets(prev => [newAsset, ...prev]);
       } catch (err) {
-        console.error("Error processing asset file:", err);
+        console.error('Upload error:', err);
+      } finally {
+        setTimeout(() => {
+          setUploadStatus({ isUploading: false, progress: 0, status: '', fileName: '' });
+        }, 1000);
       }
     }
-
-    if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
-  const handleRemoveAsset = (id, e) => {
-    e?.stopPropagation();
-    setAssets(prev => prev.filter(a => a.id !== id));
-    if (previewAsset?.id === id) {
-      setPreviewAsset(null);
+  const handleDeleteDocument = async (docId, e) => {
+    e.stopPropagation();
+    if (!confirm('Are you sure you want to delete this document from your Assets library?')) return;
+
+    try {
+      let authHeader = {};
+      try {
+        const user = JSON.parse(localStorage.getItem('astrx_user') || '{}');
+        if (user && user.token) authHeader['Authorization'] = `Bearer ${user.token}`;
+      } catch {}
+
+      const res = await fetch(`/api/backend/api/documents/${docId}`, {
+        method: 'DELETE',
+        headers: authHeader
+      });
+      if (res.ok) {
+        setDocuments(prev => prev.filter(d => d.id !== docId));
+        if (selectedDocId === docId) setSelectedDocId(null);
+      }
+    } catch (err) {
+      console.error('Delete document failed:', err);
     }
   };
 
-  const filteredAssets = assets.filter(asset => {
-    const matchesSearch = asset.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
-                          asset.tag.toLowerCase().includes(searchQuery.toLowerCase());
-    if (!matchesSearch) return false;
+  const handleAskDocuments = async () => {
+    if (!docQuery.trim() || isAnswering) return;
 
-    if (activeFilter === 'all') return true;
-    if (activeFilter === 'documents') return asset.category === 'documents' || asset.type === 'doc';
-    if (activeFilter === 'images') return asset.category === 'images' || asset.type === 'image';
-    if (activeFilter === 'generated') return asset.category === 'generated' || asset.type === 'generated';
-    if (activeFilter === 'research') return asset.category === 'research' || asset.type === 'research';
-    if (activeFilter === 'code') return asset.category === 'code' || asset.type === 'code';
-    return true;
-  });
+    const userMessage = { sender: 'user', text: docQuery };
+    setChatHistory(prev => [...prev, userMessage]);
+    const currentQ = docQuery;
+    setDocQuery('');
+    setIsAnswering(true);
 
-  const getAssetIcon = (type) => {
-    switch (type) {
-      case 'image':
-        return <ImageIcon size={18} />;
-      case 'generated':
-        return <Sparkles size={18} className="text-amber-300" />;
-      case 'code':
-        return <Code2 size={18} className="text-cyan-300" />;
-      case 'research':
-        return <FlaskConical size={18} className="text-indigo-300" />;
-      default:
-        return <FileText size={18} className="text-white/70" />;
+    try {
+      let authHeader = {};
+      try {
+        const user = JSON.parse(localStorage.getItem('astrx_user') || '{}');
+        if (user && user.token) authHeader['Authorization'] = `Bearer ${user.token}`;
+      } catch {}
+
+      const res = await fetch('/api/backend/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeader },
+        body: JSON.stringify({
+          message: currentQ,
+          mode: 'assets',
+          selected_doc_id: selectedDocId || undefined,
+          history: chatHistory.map(m => ({ role: m.sender === 'user' ? 'user' : 'assistant', text: m.text }))
+        })
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        setChatHistory(prev => [
+          ...prev,
+          {
+            sender: 'assistant',
+            text: data.answer,
+            sources: data.sources || [],
+            model: data.model_used
+          }
+        ]);
+      } else {
+        const err = await res.json().catch(() => ({}));
+        setChatHistory(prev => [
+          ...prev,
+          {
+            sender: 'assistant',
+            text: err.detail || 'Could not retrieve answer from documents. Please try again.'
+          }
+        ]);
+      }
+    } catch (err) {
+      console.error('RAG query error:', err);
+      setChatHistory(prev => [
+        ...prev,
+        { sender: 'assistant', text: 'Network connection issue with document RAG service.' }
+      ]);
+    } finally {
+      setIsAnswering(false);
     }
   };
+
+  const getDocIcon = (type = '') => {
+    const t = type.toLowerCase();
+    if (t.includes('pdf')) return <FileText className="w-5 h-5 text-red-400" />;
+    if (t.includes('doc')) return <FileText className="w-5 h-5 text-blue-400" />;
+    if (t.includes('xls') || t.includes('csv')) return <FileSpreadsheet className="w-5 h-5 text-emerald-400" />;
+    if (t.includes('png') || t.includes('jpg') || t.includes('jpeg')) return <ImageIcon className="w-5 h-5 text-purple-400" />;
+    if (t.includes('json') || t.includes('xml') || t.includes('py')) return <FileCode className="w-5 h-5 text-amber-400" />;
+    return <FileQuestion className="w-5 h-5 text-slate-400" />;
+  };
+
+  const filteredDocs = documents.filter(d => 
+    d.name.toLowerCase().includes(searchQuery.toLowerCase())
+  );
 
   return (
-    <div className="w-full h-full flex flex-col p-4 sm:p-6 md:p-8 select-none overflow-hidden font-victor animate-in fade-in duration-200">
-      
-      {/* Hidden Native File Input */}
-      <input 
-        ref={fileInputRef}
-        type="file"
-        multiple
-        onChange={handleFileUpload}
-        className="hidden"
-      />
-
-      {/* Top Header Bar: (Back) Assets Archive & Upload Asset */}
-      <div className="flex items-center justify-between mb-5 shrink-0">
-        <div className="flex items-center gap-3">
+    <div className="flex-1 flex flex-col h-full bg-[#080d1a] text-slate-100 overflow-hidden">
+      {/* Top Bar */}
+      <div className="flex items-center justify-between px-6 py-4 border-b border-white/10 bg-slate-950/80 backdrop-blur-md">
+        <div className="flex items-center space-x-3">
           <button
             onClick={onBackToChat}
-            title="Back"
-            className="w-9 h-9 rounded-xl bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-all cursor-pointer shadow-md hover:scale-105"
+            className="p-2 hover:bg-white/10 rounded-lg text-slate-400 hover:text-white transition-all flex items-center space-x-2"
           >
-            <ArrowLeft size={18} />
+            <ArrowLeft className="w-5 h-5" />
+            <span className="text-sm font-medium">Back to Chat</span>
           </button>
-          
-          <h2 className="text-xl font-bold font-victor text-white flex items-center gap-2.5 tracking-tight">
-            <Box size={22} className="text-white/80" />
-            <span>Assets Archive</span>
-          </h2>
+          <div className="h-4 w-px bg-white/20" />
+          <div className="flex items-center space-x-2">
+            <Box className="w-5 h-5 text-cyan-400" />
+            <span className="text-sm font-semibold tracking-wide text-white">ASSETS INTELLIGENCE</span>
+            <span className="px-2 py-0.5 text-xs bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 rounded-full font-mono">
+              Multimodal RAG Mode
+            </span>
+          </div>
         </div>
 
-        {/* Upload Asset Pill Button */}
-        <button
-          onClick={() => fileInputRef.current?.click()}
-          className="px-4 py-2 rounded-full bg-white/10 hover:bg-white/20 text-white font-victor text-xs font-medium flex items-center gap-2 border border-white/[0.08] transition-all cursor-pointer shadow-md hover:scale-105 active:scale-95"
-        >
-          <UploadCloud size={15} />
-          <span>Upload Asset</span>
-        </button>
-      </div>
-
-      {/* Search & Filter Bar */}
-      <div className="flex flex-col sm:flex-row items-center justify-between gap-3 mb-5 shrink-0">
-        {/* Filter Pills */}
-        <div className="flex items-center gap-1.5 overflow-x-auto w-full sm:w-auto pb-1 sm:pb-0 scrollbar-none">
-          {[
-            { key: 'all', label: 'All' },
-            { key: 'documents', label: 'Documents' },
-            { key: 'images', label: 'Images' },
-            { key: 'generated', label: 'Generated' },
-            { key: 'research', label: 'Research' },
-            { key: 'code', label: 'Scripts' }
-          ].map(tab => (
-            <button
-              key={tab.key}
-              onClick={() => setActiveFilter(tab.key)}
-              className={`px-3 py-1 rounded-full text-xs font-victor transition-all cursor-pointer shrink-0 ${
-                activeFilter === tab.key
-                  ? 'bg-white/20 text-white font-medium shadow-sm'
-                  : 'text-white/50 hover:text-white hover:bg-white/5'
-              }`}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
-
-        {/* Quick Search */}
-        <div className="relative w-full sm:w-60 shrink-0">
-          <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/30" />
+        <div className="flex items-center space-x-3">
           <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search archive..."
-            className="w-full bg-[#1c222c] border border-white/[0.08] rounded-full pl-8 pr-3 py-1.5 text-xs text-white placeholder:text-white/30 focus:outline-none focus:border-white/20 transition-all font-victor"
+            type="file"
+            ref={fileInputRef}
+            onChange={(e) => handleUploadFiles(e.target.files)}
+            multiple
+            className="hidden"
+            accept=".pdf,.docx,.doc,.txt,.md,.pptx,.xlsx,.csv,.json,.xml,.html,.png,.jpg,.jpeg,.webp"
           />
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={uploadStatus.isUploading}
+            className="flex items-center space-x-2 px-4 py-2 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-600 hover:to-blue-700 text-white rounded-xl text-xs sm:text-sm font-medium transition-all shadow-lg shadow-cyan-500/25 disabled:opacity-50"
+          >
+            <UploadCloud className="w-4 h-4" />
+            <span>Upload Document</span>
+          </button>
         </div>
       </div>
 
-      {/* Assets Grid */}
-      <div className="flex-1 min-h-0 overflow-y-auto pr-1 scrollbar-edge">
-        {filteredAssets.length === 0 ? (
-          <div className="h-64 flex flex-col items-center justify-center text-center p-6 rounded-2xl border border-white/[0.04] bg-[#1c222c]/40">
-            <Box size={36} className="text-white/20 mb-2" />
-            <p className="text-xs text-white/40 font-victor">No assets found in archive</p>
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              className="mt-3 px-3.5 py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white text-xs font-victor transition-colors cursor-pointer"
-            >
-              Upload your first asset
-            </button>
+      {/* Upload Progress Alert Banner */}
+      {uploadStatus.isUploading && (
+        <div className="px-6 py-2.5 bg-cyan-950/90 border-b border-cyan-500/30 flex items-center justify-between">
+          <div className="flex items-center space-x-3">
+            <Loader2 className="w-4 h-4 animate-spin text-cyan-400" />
+            <span className="text-xs font-mono text-cyan-200">
+              Indexing {uploadStatus.fileName}: {uploadStatus.status}
+            </span>
           </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 pb-6">
-            {filteredAssets.map((asset) => (
-              <div
-                key={asset.id}
-                onClick={() => {
-                  if (asset.previewUrl) {
-                    setPreviewAsset(asset);
-                  }
-                }}
-                className={`p-4 rounded-2xl border border-white/[0.08] hover:border-white/20 transition-all flex items-center justify-between group shadow-xl ${
-                  asset.previewUrl ? 'cursor-pointer' : 'cursor-default'
-                }`}
-                style={{
-                  backgroundColor: '#1c222c',
-                }}
-              >
-                {/* Left Info */}
-                <div className="flex items-center gap-3.5 min-w-0 flex-1">
-                  <div className="w-10 h-10 rounded-xl bg-white/[0.04] border border-white/5 flex items-center justify-center shrink-0 text-white/70 group-hover:text-white transition-colors overflow-hidden">
-                    {asset.previewUrl ? (
-                      <img 
-                        src={asset.previewUrl} 
-                        alt={asset.name} 
-                        className="w-full h-full object-cover rounded-lg"
-                      />
-                    ) : (
-                      getAssetIcon(asset.type)
-                    )}
-                  </div>
-                  
-                  <div className="min-w-0 flex-1 pr-2">
-                    <h4 className="text-xs font-medium font-victor text-white group-hover:text-white truncate">
-                      {asset.name}
-                    </h4>
-                    <div className="flex items-center gap-2 text-[11px] text-white/40 font-victor mt-1">
-                      <span>{asset.size}</span>
-                      <span>•</span>
-                      <span>{asset.dateTime}</span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Right Badge & Remove Action */}
-                <div className="flex items-center gap-2 shrink-0">
-                  <span className="text-[10px] font-victor px-2.5 py-0.5 rounded-full bg-white/5 border border-white/10 text-white/70">
-                    {asset.tag}
-                  </span>
-
-                  {/* Remove Button */}
-                  <button
-                    onClick={(e) => handleRemoveAsset(asset.id, e)}
-                    title="Remove asset"
-                    className="p-1.5 rounded-lg text-white/30 hover:text-rose-400 hover:bg-white/5 transition-colors cursor-pointer opacity-70 group-hover:opacity-100"
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* Asset Preview Thumbnail Modal (Only shown for items with a thumbnail) */}
-      {previewAsset && previewAsset.previewUrl && (
-        <div 
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-md animate-in fade-in duration-150"
-          onClick={() => setPreviewAsset(null)}
-        >
-          <div 
-            className="w-full max-w-lg rounded-2xl border border-white/15 p-5 shadow-2xl space-y-3 font-victor animate-in zoom-in-95 duration-150"
-            style={{ backgroundColor: '#1c222c' }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-start justify-between">
-              <div className="flex items-center gap-3 min-w-0">
-                <div className="w-9 h-9 rounded-xl bg-white/[0.04] border border-white/5 flex items-center justify-center shrink-0">
-                  {getAssetIcon(previewAsset.type)}
-                </div>
-                <div className="min-w-0">
-                  <h3 className="text-xs sm:text-sm font-semibold text-white truncate max-w-[340px]">{previewAsset.name}</h3>
-                  <p className="text-[11px] text-white/40 mt-0.5">{previewAsset.size} • {previewAsset.dateTime}</p>
-                </div>
-              </div>
-              <button
-                onClick={() => setPreviewAsset(null)}
-                className="p-1 rounded-lg text-white/40 hover:text-white hover:bg-white/10 transition-colors cursor-pointer shrink-0 ml-2"
-              >
-                <X size={16} />
-              </button>
-            </div>
-
-            {/* Thumbnail Image View */}
-            <div className="max-h-80 overflow-hidden rounded-xl border border-white/10 bg-black/50 flex items-center justify-center p-2">
-              <img 
-                src={previewAsset.previewUrl} 
-                alt={previewAsset.name} 
-                className="max-h-72 w-auto object-contain rounded-lg"
-              />
-            </div>
-
-            <div className="flex items-center justify-between pt-2 border-t border-white/10">
-              <button
-                onClick={(e) => handleRemoveAsset(previewAsset.id, e)}
-                className="px-3 py-1.5 rounded-full text-rose-400 hover:bg-rose-500/10 text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
-              >
-                <Trash2 size={13} />
-                <span>Remove</span>
-              </button>
-
-              <button
-                onClick={() => setPreviewAsset(null)}
-                className="px-4 py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white text-xs transition-colors cursor-pointer"
-              >
-                Close
-              </button>
-            </div>
-          </div>
+          <span className="text-xs font-mono text-cyan-400">{uploadStatus.progress}%</span>
         </div>
       )}
+
+      {/* Main Split Layout: Documents Explorer (Left) & Grounded Q&A Chat (Right) */}
+      <div className="flex-1 flex flex-col lg:flex-row overflow-hidden">
+        {/* Left: Documents Library */}
+        <div className="w-full lg:w-1/2 flex flex-col border-b lg:border-b-0 lg:border-r border-white/10 bg-slate-900/40 p-4 overflow-hidden">
+          {/* Search bar & filter info */}
+          <div className="flex items-center justify-between mb-3">
+            <div className="relative flex-1 mr-3">
+              <Search className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
+              <input
+                type="text"
+                placeholder="Search uploaded documents..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full pl-9 pr-3 py-2 bg-black/40 border border-white/10 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500"
+              />
+            </div>
+            <span className="text-xs text-slate-400 font-mono whitespace-nowrap">
+              {filteredDocs.length} {filteredDocs.length === 1 ? 'Doc' : 'Docs'}
+            </span>
+          </div>
+
+          {/* Drag & Drop Dropzone */}
+          <div
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={(e) => {
+              e.preventDefault();
+              handleUploadFiles(e.dataTransfer.files);
+            }}
+            onClick={() => fileInputRef.current?.click()}
+            className="mb-3 p-4 border border-dashed border-cyan-500/40 hover:border-cyan-400 bg-cyan-500/5 hover:bg-cyan-500/10 rounded-xl text-center cursor-pointer transition-all"
+          >
+            <UploadCloud className="w-6 h-6 mx-auto text-cyan-400 mb-1" />
+            <p className="text-xs font-medium text-slate-200">
+              Drag & drop PDF, DOCX, PPTX, XLSX, CSV, JSON, or Images
+            </p>
+            <p className="text-[11px] text-slate-400 mt-0.5 font-mono">
+              Automated OCR & Semantic BGE Embeddings
+            </p>
+          </div>
+
+          {/* Documents List */}
+          <div className="flex-1 overflow-y-auto space-y-2 pr-1">
+            {isLoadingDocs ? (
+              <div className="py-12 text-center text-slate-400 text-xs">
+                <Loader2 className="w-6 h-6 animate-spin mx-auto text-cyan-400 mb-2" />
+                Loading indexed documents...
+              </div>
+            ) : filteredDocs.length === 0 ? (
+              <div className="py-12 text-center text-slate-500 text-xs">
+                No documents uploaded yet. Upload materials to enable document grounded Q&A.
+              </div>
+            ) : (
+              filteredDocs.map((doc) => {
+                const isSelected = selectedDocId === doc.id;
+                return (
+                  <div
+                    key={doc.id}
+                    onClick={() => setSelectedDocId(isSelected ? null : doc.id)}
+                    className={`p-3 rounded-xl border transition-all cursor-pointer flex items-center justify-between group ${
+                      isSelected
+                        ? 'bg-cyan-500/20 border-cyan-500/60 shadow-md shadow-cyan-500/10'
+                        : 'bg-slate-900/80 hover:bg-slate-800/80 border-white/5 hover:border-white/20'
+                    }`}
+                  >
+                    <div className="flex items-center space-x-3 min-w-0">
+                      <div className="p-2 rounded-lg bg-black/40">
+                        {getDocIcon(doc.file_type || doc.name)}
+                      </div>
+                      <div className="min-w-0">
+                        <h4 className="text-xs font-medium text-slate-200 truncate group-hover:text-cyan-300 transition-colors">
+                          {doc.name}
+                        </h4>
+                        <div className="flex items-center space-x-2 text-[11px] text-slate-400 font-mono mt-0.5">
+                          <span>{doc.chunks_count || 0} chunks</span>
+                          <span>•</span>
+                          <span>{doc.status === 'ready' ? 'Indexed' : 'Processing'}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center space-x-1">
+                      <button
+                        onClick={(e) => handleDeleteDocument(doc.id, e)}
+                        className="p-1.5 hover:bg-red-500/20 text-slate-400 hover:text-red-400 rounded-lg transition-colors"
+                        title="Delete document and clear vector index"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+
+        {/* Right: Document-Grounded Q&A Chat Interface */}
+        <div className="w-full lg:w-1/2 flex flex-col bg-slate-950/80">
+          {/* Header of Chat */}
+          <div className="px-4 py-2.5 border-b border-white/10 flex items-center justify-between bg-slate-900/60">
+            <div className="flex items-center space-x-2">
+              <Sparkles className="w-4 h-4 text-cyan-400" />
+              <span className="text-xs font-semibold text-white">Ask Uploaded Documents</span>
+            </div>
+            <span className="text-[11px] font-mono text-cyan-300 bg-cyan-950/60 px-2 py-0.5 rounded border border-cyan-500/20">
+              {selectedDocId
+                ? `Filter: ${documents.find(d => d.id === selectedDocId)?.name || 'Selected Doc'}`
+                : 'Searching Across All Documents'}
+            </span>
+          </div>
+
+          {/* Chat Messages */}
+          <div ref={chatScrollRef} className="flex-1 p-4 overflow-y-auto space-y-4 text-xs leading-relaxed">
+            {chatHistory.length === 0 ? (
+              <div className="h-full flex flex-col items-center justify-center text-center text-slate-500 px-6 py-12">
+                <Box className="w-10 h-10 text-cyan-500/30 mb-3" />
+                <h3 className="text-sm font-semibold text-slate-300">Document Grounded Intelligence</h3>
+                <p className="text-xs text-slate-400 mt-1 max-w-sm">
+                  Ask any question about your uploaded materials. Answers will be strictly derived from your documents with verifiable citations.
+                </p>
+              </div>
+            ) : (
+              chatHistory.map((msg, idx) => (
+                <div
+                  key={idx}
+                  className={`flex flex-col ${msg.sender === 'user' ? 'items-end' : 'items-start'}`}
+                >
+                  <div
+                    className={`max-w-[85%] rounded-2xl p-3.5 text-xs whitespace-pre-wrap ${
+                      msg.sender === 'user'
+                        ? 'bg-cyan-600 text-white rounded-br-none shadow-md shadow-cyan-600/20'
+                        : 'bg-slate-900 border border-white/10 text-slate-200 rounded-bl-none'
+                    }`}
+                  >
+                    {msg.text}
+                  </div>
+
+                  {/* Grounded Citations Provenance Pill */}
+                  {msg.sources && msg.sources.length > 0 && (
+                    <div className="mt-2 space-y-1 max-w-[85%]">
+                      <span className="text-[10px] font-mono font-medium text-cyan-400 uppercase tracking-wider">
+                        Verifiable Sources:
+                      </span>
+                      {msg.sources.map((s, i) => (
+                        <div key={i} className="p-2 rounded-lg bg-slate-900/60 border border-cyan-500/20 text-[11px] text-slate-300">
+                          <span className="font-semibold text-cyan-300">{s.label}: </span>
+                          <span className="text-slate-400">{s.snippet}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))
+            )}
+            {isAnswering && (
+              <div className="flex items-center space-x-2 text-slate-400 text-xs">
+                <Loader2 className="w-4 h-4 animate-spin text-cyan-400" />
+                <span>Retrieving chunks & synthesizing grounded response...</span>
+              </div>
+            )}
+          </div>
+
+          {/* Ask Astra Input */}
+          <div className="p-3 border-t border-white/10 bg-slate-950">
+            <div className="flex items-center space-x-2 bg-slate-900 border border-cyan-500/30 rounded-xl px-3 py-2 focus-within:border-cyan-400 transition-all">
+              <input
+                type="text"
+                placeholder={
+                  selectedDocId
+                    ? `Ask about ${documents.find(d => d.id === selectedDocId)?.name}...`
+                    : 'Ask anything about your uploaded documents...'
+                }
+                value={docQuery}
+                onChange={(e) => setDocQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    handleAskDocuments();
+                  }
+                }}
+                className="flex-1 bg-transparent text-slate-100 placeholder-slate-500 text-xs focus:outline-none"
+              />
+              <button
+                onClick={handleAskDocuments}
+                disabled={isAnswering || !docQuery.trim()}
+                className="p-1.5 bg-cyan-500 hover:bg-cyan-600 text-white rounded-lg transition-all disabled:opacity-40"
+              >
+                <Send className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

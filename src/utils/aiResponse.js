@@ -9,7 +9,8 @@
 // - Document Grounding & Semantic Chunking with Verifiable Citations
 // - Hybrid Server-Backend Bridge (/api/backend/api/chat) with Fallback
 
-const GROQ_API_KEY = import.meta.env.VITE_GROQ_API_KEY || "";
+// All API calls are securely routed via the backend proxy (/api/backend/api/chat)
+// Never expose secrets or API keys on the client-side.
 
 /**
  * Clean agent response: remove raw thinking traces, normalize LaTeX, format citations
@@ -18,6 +19,8 @@ function cleanAgentResponse(text) {
   if (!text || typeof text !== "string") return "";
   let cleaned = text.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
   cleaned = cleaned.replace(/\\\[/g, "$$").replace(/\\\]/g, "$$");
+  // Strip all emojis from output
+  cleaned = cleaned.replace(/[\u{1F300}-\u{1F6FF}\u{1F900}-\u{1F9FF}\u{1FA70}-\u{1FAFF}\u{2702}-\u{27B0}\u{2600}-\u{26FF}]/gu, "");
   return cleaned;
 }
 
@@ -325,9 +328,9 @@ function handleGreetingAndFeelings(query) {
 
   if (simpleGreetings.has(cleanQ) || /^(?:hi|hey|hello|yo)\s+(?:astrx|astra|there|friend|bro)[\s!.]*$/i.test(cleanQ)) {
     const greetings = [
-      "Hi! 👋 Good to see you again. What are we working on today?",
-      "Hello! 👋 Ready when you are. How can I assist your research, code, or queries today?",
-      "Hey there! Astrx is ready and firing on all cylinders. What's on your mind?"
+      "Hi. Good to see you again. What are we working on today?",
+      "Hello. Ready when you are. How can I assist your research, code, or queries today?",
+      "Hey there. Astrx is ready. What is on your mind?"
     ];
     return greetings[Math.floor(Math.random() * greetings.length)];
   }
@@ -442,194 +445,157 @@ function extractGroundedDocumentChunks(documents, query) {
     snippet: c.chunk.slice(0, 160) + "..."
   }));
 
-  const contextStr = topChunks.map(c => `[📄 Source: ${c.name}, p. ${c.page}]\n${c.chunk}`).join('\n\n');
+  const contextStr = topChunks.map(c => `[Source: ${c.name}, p. ${c.page}]\n${c.chunk}`).join('\n\n');
 
   return { context: contextStr, citations };
 }
 
 /**
  * Main Astra RAG Agent Query Pipeline
+ * Strictly proxies all inference through the backend (/api/backend/api/chat)
+ * Supports: Core, Assets, Code, and Study modes.
  */
-export async function askGroqAI(history = [], userPrompt = '', modelName = 'Astracore 4', webSearch = false, attachment = null) {
-  const query = userPrompt.trim();
+export async function askGroqAI(history = [], userPrompt = '', modelName = 'Astracore 4', webSearch = false, attachment = null, mode = 'core', conversationId = null) {
+  const query = (userPrompt || '').trim();
 
-  // 1. Phase 0: Intercept Greetings & Feelings
-  const greetingAnswer = handleGreetingAndFeelings(query);
-  if (greetingAnswer && (!attachment || !attachment.extractedText)) {
-    return greetingAnswer;
+  // 0. Mathematical Handwriting & Visual Problem Recognition (/api/math/solve-image)
+  if (attachment && attachment.isImage && (attachment.file || attachment.base64Data)) {
+    const isMathQuery = !query || /\b(?:solve|calculate|evaluate|equation|math|formula|handwrit|derivative|integral|step|problem|proof)\b/i.test(query);
+    if (isMathQuery) {
+      try {
+        const formData = new FormData();
+        if (attachment.file) {
+          formData.append('file', attachment.file);
+        } else if (attachment.base64Data) {
+          const res = await fetch(attachment.base64Data);
+          const blob = await res.blob();
+          formData.append('file', blob, attachment.name || 'handwritten_math.png');
+        }
+
+        let authHeader = {};
+        try {
+          const savedUser = JSON.parse(localStorage.getItem('astrx_user') || '{}');
+          if (savedUser && savedUser.token) {
+            authHeader['Authorization'] = `Bearer ${savedUser.token}`;
+          }
+        } catch {}
+
+        const mathRes = await fetch('/api/backend/api/math/solve-image', {
+          method: 'POST',
+          headers: authHeader,
+          body: formData
+        });
+
+        if (mathRes.ok) {
+          const data = await mathRes.json();
+          if (data && data.solution) {
+            let finalAns = '';
+            if (data.extracted_text) {
+              finalAns += `**Recognized Expression:** \`${data.extracted_text}\`\n\n`;
+            }
+            if (data.sympy_solution && data.sympy_verified) {
+              finalAns += `${data.sympy_solution}\n\n---\n### Verified Pedagogical Solution\n\n`;
+            }
+            finalAns += data.solution;
+            return cleanAgentResponse(finalAns);
+          }
+        }
+      } catch (ocrErr) {
+        console.warn('Handwriting OCR fallback to standard query:', ocrErr);
+      }
+    }
   }
 
-  // 2. Phase 0.5: Symbolic Mathematics & Calculus Solver
+  // 1. Instant local math solutions
   const mathSolution = solveMathLocally(query);
-  if (mathSolution) {
+  if (mathSolution && mode === 'core') {
     return cleanAgentResponse(mathSolution);
   }
 
-  // 3. Phase 0.6: 3D Visualization Generator
+  // 2. Interactive 3D Model Generator
   const visualization3D = generate3DVisualization(query);
-  if (visualization3D) {
+  if (visualization3D && mode === 'core') {
     return cleanAgentResponse(visualization3D);
   }
 
-  // 4. Phase 0.7: Data Chart Generator
+  // 3. Interactive Data Chart Generator
   const dataChart = generateDataChart(query);
-  if (dataChart) {
+  if (dataChart && mode === 'core') {
     return cleanAgentResponse(dataChart);
   }
 
-  // 5. Phase 0.8: 2D Function Plot Generator
+  // 4. Interactive 2D Function Plot Generator
   const plot2D = generate2DPlot(query);
-  if (plot2D) {
+  if (plot2D && mode === 'core') {
     return cleanAgentResponse(plot2D);
   }
 
-  // 6. Gather all documents across history
-  const allDocs = [];
-  if (attachment && attachment.extractedText && !attachment.isImage) {
-    allDocs.push({ name: attachment.name, text: attachment.extractedText });
-  }
-  history.forEach(m => {
-    if (m.attachment && m.attachment.extractedText && !m.attachment.isImage) {
-      if (!allDocs.some(d => d.name === m.attachment.name)) {
-        allDocs.push({ name: m.attachment.name, text: m.attachment.extractedText });
-      }
-    }
-  });
-
-  const { context: groundedDocContext, citations } = extractGroundedDocumentChunks(allDocs, query);
-
-  // 7. Try FastAPI Backend if running (Hybrid RAG Bridge)
+  // 5. Secure Backend API Proxy Call
   try {
-    const backendRes = await fetch('/api/backend/api/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        message: query,
-        history: history.slice(-6).map(m => ({ role: m.sender === 'user' ? 'user' : 'assistant', text: m.text })),
-        web_search: webSearch
-      })
-    });
-    if (backendRes.ok) {
-      const backendData = await backendRes.json();
-      if (backendData && backendData.answer) {
-        return cleanAgentResponse(backendData.answer);
-      }
-    }
-  } catch {}
-
-  // 8. Live Multi-Angle Search
-  const queryLower = query.toLowerCase();
-  const needsWebSearch = webSearch || 
-    /\b(?:who won|winner|champion|grand prix|latest|recent|news|today|2024|2025|2026|current|standings|release date)\b/i.test(queryLower);
-
-  let searchContext = "";
-  if (needsWebSearch && query.length > 3) {
-    searchContext = await fetchMultiAngleWebSearch(query);
-  }
-
-  // 9. Build Comprehensive Astra RAG System Prompt
-  const systemPrompt = `You are ASTRX, a frontier autonomous intelligence system with verifiable document grounding, symbolic mathematics, 3D/2D visualization engines, and real-time 2026 knowledge.
-
-CRITICAL INSTRUCTIONS:
-- Current Year: Today is September 2026. You have active real-time web capabilities.
-- Continuity: ALWAYS maintain contextual memory from earlier turns in this session. Refer back naturally to pronouns ("it", "they", "that", "the previous result").
-- Grounded Citations: When documents are provided, answer strictly based on the cited sections. Include citations using [📄 Source: FileName, p. X] format. NEVER invent fake facts or author names.
-- Visual Rendering:
-  1. For 2D function graphs (e.g. y = x^2, sin(x)), output \`\`\`plot blocks.
-  2. For 3D models or surfaces, output \`\`\`plot3d blocks.
-  3. For comparison datasets or metrics, output \`\`\`chart blocks.
-  4. For Python code, output executable \`\`\`python blocks.
-- Math Formatting: Format all math equations in clean LaTeX using $$...$$ for display formulas and $...$ for inline expressions.
-- Tone: Natural, highly intelligent, engaging, and comprehensive. Conclude all reasoning clearly without cutting off mid-sentence.
-- Do NOT output raw <think> tags.`;
-
-  // 10. Message Payload
-  let userContent = query || "Hello! Please summarize what you can do.";
-  if (groundedDocContext) {
-    userContent += `\n\n[=== Grounded Source Documents in Session ===]\n${groundedDocContext}`;
-  }
-  if (searchContext) {
-    userContent += `\n\n[=== Multi-Angle Live Web Search Context ===]\n${searchContext}`;
-  }
-
-  const isImageAttachment = attachment?.isImage && attachment?.base64Data;
-  let formattedUserContent;
-  if (isImageAttachment) {
-    formattedUserContent = [
-      { type: "text", text: query || "Inspect this image in detail and describe the visual structure." },
-      { type: "image_url", image_url: { url: attachment.base64Data } }
-    ];
-  } else {
-    formattedUserContent = userContent;
-  }
-
-  const candidateModels = [
-    (modelName && (modelName.includes('3.1-O') || modelName.includes('Omni') || modelName.includes('Extended'))) ? 'qwen/qwen3.8-27b' : 'openai/gpt-oss-120b',
-    'qwen/qwen3.8-27b',
-    'qwen/qwen3.6-27b',
-    'openai/gpt-oss-20b'
-  ];
-
-  const formattedMessages = [
-    { role: "system", content: systemPrompt },
-    ...history.filter(m => !m.isThinking && !m.isResearching && m.text).map(m => ({
-      role: m.sender === 'user' ? 'user' : 'assistant',
-      content: typeof m.text === 'string' ? m.text : String(m.text || '')
-    })),
-    {
-      role: "user",
-      content: formattedUserContent
-    }
-  ];
-
-  for (const modelId of candidateModels) {
+    let authHeader = {};
     try {
-      const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${GROQ_API_KEY}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          model: modelId,
-          messages: formattedMessages,
-          max_tokens: 4096,
-          temperature: 0.6
-        })
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        let text = data.choices?.[0]?.message?.content || "";
-        text = cleanAgentResponse(text);
-        if (text) {
-          // If citations exist and aren't mentioned yet, append a clean source provenance pill
-          if (citations.length > 0 && !text.includes("📄 Source:")) {
-            const citeFootnote = "\n\n---\n**Grounded Document Sources:**\n" +
-              citations.map(c => `• **${c.docName}** (p. ${c.page}) — *relevance: ${c.score}*`).join('\n');
-            text += citeFootnote;
-          }
-          return text;
-        }
+      const savedUser = JSON.parse(localStorage.getItem('astrx_user') || '{}');
+      if (savedUser && savedUser.token) {
+        authHeader['Authorization'] = `Bearer ${savedUser.token}`;
       }
-    } catch (err) {
-      console.warn(`Groq attempt with ${modelId} failed:`, err);
+    } catch {}
+
+    const payload = {
+      message: query,
+      mode: mode || 'core',
+      history: history.slice(-24).map(m => ({
+        role: m.sender === 'user' || m.role === 'user' ? 'user' : 'assistant',
+        text: m.text || m.content || ''
+      })),
+      web_search: Boolean(webSearch),
+      attachment: attachment ? {
+        name: attachment.name,
+        extractedText: attachment.extractedText || '',
+        isImage: Boolean(attachment.isImage),
+        size: attachment.size
+      } : null,
+      conversation_id: conversationId || undefined
+    };
+
+    const res = await fetch('/api/backend/api/chat', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...authHeader
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (res.status === 429) {
+      const err = await res.json().catch(() => ({}));
+      return `**Monthly API Limit Reached** (20 / 20 Calls)\n\n${err.detail || 'You have used all 20 free monthly API queries. Your quota will reset automatically on the 1st of next month.'}`;
     }
+
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.answer) {
+        // If usage was returned, notify listener/localStorage
+        if (data.usage) {
+          window.dispatchEvent(new CustomEvent('astra_usage_updated', { detail: data.usage }));
+        }
+        return cleanAgentResponse(data.answer);
+      }
+    } else {
+      const errData = await res.json().catch(() => ({}));
+      loggerWarnBackend('Backend responded with error', res.status, errData);
+    }
+  } catch (err) {
+    console.error('Backend connection error:', err);
   }
 
   // Graceful offline fallback
-  if (groundedDocContext) {
-    let fallback = `**Astra Grounded Synthesis:**\n\n`;
-    fallback += `I analyzed the uploaded documents matching your query:\n\n${groundedDocContext.slice(0, 600)}...\n\n`;
-    if (citations.length > 0) {
-      fallback += `\n**Verified Citations:**\n` + citations.map(c => `• [📄 ${c.docName}, p. ${c.page}] (Match: ${c.score})`).join('\n');
-    }
-    return fallback;
+  if (attachment && attachment.isImage) {
+    return `I have inspected your image **${attachment.name}**. What would you like me to analyze or solve from this image?`;
   }
 
-  if (isImageAttachment) {
-    return `I have inspected your image **${attachment.name}** (${(attachment.size / 1024).toFixed(1)} KB). Visual features processed successfully.`;
-  }
+  return `I encountered a momentary connection issue with the intelligence kernel. Please ensure the backend server is running and try your request again.`;
+}
 
-  return `Hello! I am Astrx. What are we exploring today? Feel free to ask math problems, request 3D/2D models, generate data charts, or upload files for grounded analysis.`;
+function loggerWarnBackend(...args) {
+  console.warn('[Astra Backend]', ...args);
 }

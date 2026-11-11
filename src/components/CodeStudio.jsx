@@ -1,433 +1,630 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import Editor from '@monaco-editor/react';
 import { 
-  X, 
+  ArrowLeft, 
+  Play, 
+  Square,
   Copy, 
   Check, 
-  Play, 
-  ChevronDown,
-  Sparkles,
-  ArrowRight,
-  Loader2
+  Download, 
+  Send, 
+  Loader2, 
+  Code2, 
+  FileCode, 
+  Terminal, 
+  Eye, 
+  Plus, 
+  Cpu,
+  Package,
+  CheckCircle2,
+  AlertCircle
 } from 'lucide-react';
-import { runPythonCode } from '../utils/pythonRunner';
 import { askGroqAI } from '../utils/aiResponse';
 
-export default function CodeStudio({ 
-  onBackToChat, 
-  initialCode = '', 
-  initialLanguage = 'python' 
-}) {
-  const [language, setLanguage] = useState(() => {
-    const lang = (initialLanguage || 'python').toLowerCase();
-    if (lang.includes('js') || lang.includes('javascript') || lang.includes('ts')) return 'javascript';
-    if (lang.includes('html') || lang.includes('web') || lang.includes('css')) return 'html';
-    return 'python';
-  });
-  const [code, setCode] = useState(initialCode || '');
-  const [consoleLogs, setConsoleLogs] = useState([]);
+export default function CodeStudio({ onBackToChat, initialCode = '', initialLanguage = 'python' }) {
+  // Editor is HIDDEN initially unless code already exists
+  const [hasGeneratedCode, setHasGeneratedCode] = useState(Boolean(initialCode && initialCode.trim()));
+  const [promptInput, setPromptInput] = useState('');
+  const [followUpInput, setFollowUpInput] = useState('');
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [explanation, setExplanation] = useState('');
+  const [codeConversation, setCodeConversation] = useState([]);
+  
+  // Multi-file tabs state
+  const [files, setFiles] = useState([
+    { name: 'main.py', language: 'python', content: initialCode || '' }
+  ]);
+  const [activeFileIndex, setActiveFileIndex] = useState(0);
+
+  // Execution & Console
+  const [activePanel, setActivePanel] = useState('explanation'); // 'explanation' | 'console' | 'dependencies' | 'preview'
+  const [consoleOutput, setConsoleOutput] = useState('');
   const [isRunning, setIsRunning] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [activeTab, setActiveTab] = useState('console'); // 'console' | 'preview'
-  const [isLangDropdownOpen, setIsLangDropdownOpen] = useState(false);
+  const abortControllerRef = useRef(null);
 
-  // "Ask ASTRX" AI Code Assistant
-  const [isAiPromptOpen, setIsAiPromptOpen] = useState(false);
-  const [aiPrompt, setAiPrompt] = useState('');
-  const [isGenerating, setIsGenerating] = useState(false);
+  // Dependency Management
+  const [dependencies, setDependencies] = useState([]);
+  const [isInstallingDep, setIsInstallingDep] = useState(false);
 
   useEffect(() => {
-    if (initialCode) {
-      setCode(initialCode);
-      const lang = (initialLanguage || 'python').toLowerCase();
-      if (lang.includes('js') || lang.includes('javascript')) setLanguage('javascript');
-      else if (lang.includes('html') || lang.includes('web')) {
-        setLanguage('html');
-        setActiveTab('preview');
-      } else {
-        setLanguage('python');
-      }
+    if (initialCode && initialCode.trim()) {
+      parseAndSetCode(initialCode, initialLanguage);
+      setHasGeneratedCode(true);
+      setCodeConversation([{ role: 'assistant', content: initialCode }]);
     }
   }, [initialCode, initialLanguage]);
 
-  const handleLanguageChange = (newLang) => {
-    setLanguage(newLang);
-    setIsLangDropdownOpen(false);
-    if (newLang === 'html') {
-      setActiveTab('preview');
+  // Check dependencies whenever active code changes
+  useEffect(() => {
+    const current = files[activeFileIndex];
+    if (current && current.language === 'python' && current.content.trim()) {
+      const timer = setTimeout(async () => {
+        try {
+          const res = await fetch('/api/backend/api/code/deps/check', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ code: current.content, language: 'python' })
+          });
+          if (res.ok) {
+            const data = await res.json();
+            setDependencies(data.dependencies || []);
+          }
+        } catch {}
+      }, 600);
+      return () => clearTimeout(timer);
     } else {
-      setActiveTab('console');
+      setDependencies([]);
     }
-  };
+  }, [files, activeFileIndex]);
 
-  const handleClear = () => {
-    setCode('');
-    setConsoleLogs([]);
-  };
+  const parseAndSetCode = (rawText, defaultLang = 'python') => {
+    const fileMatches = [];
+    const codeBlockRegex = /```([a-zA-Z0-9_\-+]*)\s*(?:\/\/\s*filename:\s*([^\n]+)|<!--\s*filename:\s*([^\n]+)\s*-->)?\n([\s\S]*?)```/g;
+    let match;
 
-  const handleCopy = () => {
-    navigator.clipboard.writeText(code);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  const handleRun = async () => {
-    if (!code.trim()) {
-      setConsoleLogs(['No code to run.']);
-      return;
+    while ((match = codeBlockRegex.exec(rawText)) !== null) {
+      const lang = match[1] || defaultLang;
+      const filename = match[2] || match[3] || (lang === 'python' ? 'main.py' : lang === 'html' ? 'index.html' : lang === 'javascript' ? 'index.js' : `main.${lang}`);
+      const content = match[4].trim();
+      fileMatches.push({ name: filename.trim(), language: normalizeLang(lang), content });
     }
 
-    setIsRunning(true);
-    const runStartTime = performance.now();
-
-    if (language === 'python') {
-      setConsoleLogs([
-        'Run started',
-        'Initializing Python environment',
-        'Running code'
-      ]);
-
-      const result = await runPythonCode(code);
-      const totalTime = (performance.now() - runStartTime).toFixed(2);
-
-      if (result.success) {
-        setConsoleLogs([
-          'Run started',
-          'Initializing Python environment',
-          'Running code',
-          ...result.logs,
-          `Run completed in ${totalTime}ms`
-        ]);
-      } else {
-        setConsoleLogs([
-          'Run started',
-          'Initializing Python environment',
-          'Running code',
-          ...result.logs,
-          result.error,
-          `Run failed in ${totalTime}ms`
-        ]);
-      }
-    } else if (language === 'javascript') {
-      const logs = [];
-      setConsoleLogs([
-        'Run started',
-        'Initializing JavaScript Runtime',
-        'Running script'
-      ]);
-
-      const customConsole = {
-        log: (...args) => logs.push(args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ')),
-        warn: (...args) => logs.push('[WARN] ' + args.join(' ')),
-        error: (...args) => logs.push('[ERROR] ' + args.join(' '))
-      };
-
-      try {
-        const runner = new Function('console', code);
-        await runner(customConsole);
-        const totalTime = (performance.now() - runStartTime).toFixed(2);
-        setConsoleLogs([
-          'Run started',
-          'Initializing JavaScript Runtime',
-          'Running script',
-          ...logs,
-          `Run completed in ${totalTime}ms`
-        ]);
-      } catch (err) {
-        const totalTime = (performance.now() - runStartTime).toFixed(2);
-        setConsoleLogs([
-          'Run started',
-          'Initializing JavaScript Runtime',
-          'Running script',
-          ...logs,
-          `Uncaught ${err.name}: ${err.message}`,
-          `Run failed in ${totalTime}ms`
-        ]);
-      }
+    if (fileMatches.length > 0) {
+      setFiles(fileMatches);
+      setActiveFileIndex(0);
+      const cleanExp = rawText.replace(/```[\s\S]*?```/g, '').trim();
+      setExplanation(cleanExp || 'Code generated successfully by Astra Code Agent.');
     } else {
-      setActiveTab('preview');
+      const norm = normalizeLang(defaultLang);
+      setFiles([{ name: `script.${norm === 'python' ? 'py' : norm === 'javascript' ? 'js' : norm === 'c' ? 'c' : norm === 'cpp' ? 'cpp' : 'txt'}`, language: norm, content: rawText }]);
+      setActiveFileIndex(0);
+      setExplanation('Code generated successfully by Astra Code Agent.');
     }
-
-    setIsRunning(false);
   };
 
-  const handleAskAstrxSubmit = async (e) => {
-    e?.preventDefault();
-    if (!aiPrompt.trim() || isGenerating) return;
+  const normalizeLang = (l) => {
+    const s = (l || '').toLowerCase();
+    if (s.includes('py')) return 'python';
+    if (s.includes('js') || s.includes('node')) return 'javascript';
+    if (s.includes('ts')) return 'typescript';
+    if (s.includes('html') || s.includes('htm')) return 'html';
+    if (s.includes('css')) return 'css';
+    if (s.includes('c++') || s.includes('cpp')) return 'cpp';
+    if (s === 'c') return 'c';
+    if (s.includes('json')) return 'json';
+    if (s.includes('sql')) return 'sql';
+    return 'python';
+  };
+
+  const handleGenerateCode = async (instruction) => {
+    const text = instruction || promptInput;
+    if (!text.trim() || isGenerating) return;
 
     setIsGenerating(true);
-    const userPrompt = `Write clean, functional, executable ${language.toUpperCase()} code for the following task:\n"${aiPrompt}"\n\nReturn ONLY the raw executable code without markdown wrappers or conversational filler.`;
-    
+    const userTurn = { role: 'user', content: text };
+    const historyPayload = codeConversation.map(m => ({ role: m.role, text: m.content }));
+
     try {
-      const response = await askGroqAI([], userPrompt);
-      // Clean markdown code fence if returned
-      const cleanCode = response.replace(/^```[a-zA-Z]*\n/, '').replace(/\n```$/, '').trim();
-      setCode(cleanCode);
-      setIsAiPromptOpen(false);
-      setAiPrompt('');
+      const response = await askGroqAI(historyPayload, text, 'Astra Code Engine', false, null, 'code');
+      parseAndSetCode(response);
+      setHasGeneratedCode(true);
+      setActivePanel('explanation');
+      setCodeConversation(prev => [...prev, userTurn, { role: 'assistant', content: response }]);
+      setPromptInput('');
+      setFollowUpInput('');
     } catch (err) {
-      console.error("AI code generation error:", err);
+      console.error('Code generation failed:', err);
     } finally {
       setIsGenerating(false);
     }
   };
 
-  const lineCount = Math.max(code.split('\n').length, 24);
-  const linesArray = Array.from({ length: lineCount }, (_, i) => i + 1);
+  const handleRunCode = async () => {
+    const currentFile = files[activeFileIndex];
+    if (!currentFile || !currentFile.content.trim()) return;
+
+    setIsRunning(true);
+    setActivePanel('console');
+    setConsoleOutput(`[Execution initiated: ${currentFile.name} (${currentFile.language.toUpperCase()})]\n`);
+
+    if (currentFile.language === 'html' || currentFile.name.endsWith('.html')) {
+      setActivePanel('preview');
+      setIsRunning(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
+    try {
+      let authHeader = {};
+      try {
+        const savedUser = JSON.parse(localStorage.getItem('astrx_user') || '{}');
+        if (savedUser && savedUser.token) authHeader['Authorization'] = `Bearer ${savedUser.token}`;
+      } catch {}
+
+      const res = await fetch('/api/backend/api/code/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeader },
+        body: JSON.stringify({ code: currentFile.content, language: currentFile.language }),
+        signal: controller.signal
+      });
+
+      const data = await res.json();
+      if (data.stderr) {
+        if (data.stdout) {
+          setConsoleOutput(prev => prev + `[Standard Output]:\n${data.stdout}\n\n[Errors / Warnings]:\n${data.stderr}\n[Exit Code: ${data.exit_code}]`);
+        } else {
+          setConsoleOutput(prev => prev + `[Errors]:\n${data.stderr}\n[Exit Code: ${data.exit_code}]`);
+        }
+      } else {
+        setConsoleOutput(prev => prev + `[Standard Output]:\n${data.stdout || 'Program completed with no console output.'}\n[Exit Code: ${data.exit_code}]`);
+      }
+    } catch (err) {
+      if (err.name === 'AbortError') {
+        // Handled via stop
+      } else {
+        setConsoleOutput(prev => prev + `Execution error: ${err.message}`);
+      }
+    } finally {
+      setIsRunning(false);
+      abortControllerRef.current = null;
+    }
+  };
+
+  const handleStopCode = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      setIsRunning(false);
+      setConsoleOutput(prev => prev + '\n[Execution halted by user]\n');
+    }
+  };
+
+  const handleInstallDep = async (pkgName) => {
+    if (!pkgName || isInstallingDep) return;
+    setIsInstallingDep(true);
+    setActivePanel('console');
+    setConsoleOutput(prev => prev + `\nInstalling dependency '${pkgName}' in execution environment...\n`);
+    try {
+      let authHeader = {};
+      try {
+        const savedUser = JSON.parse(localStorage.getItem('astrx_user') || '{}');
+        if (savedUser && savedUser.token) authHeader['Authorization'] = `Bearer ${savedUser.token}`;
+      } catch {}
+
+      const res = await fetch('/api/backend/api/code/deps/install', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeader },
+        body: JSON.stringify({ package: pkgName })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setConsoleOutput(prev => prev + `Successfully installed ${pkgName}.\n${data.stdout || ''}\n`);
+        setDependencies(prev => prev.map(d => d.name === pkgName ? { ...d, installed: true } : d));
+      } else {
+        setConsoleOutput(prev => prev + `Failed to install ${pkgName}:\n${data.stderr || 'Unknown error'}\n`);
+      }
+    } catch (err) {
+      setConsoleOutput(prev => prev + `Network error installing ${pkgName}: ${err.message}\n`);
+    } finally {
+      setIsInstallingDep(false);
+    }
+  };
+
+  const handleCopy = () => {
+    const currentFile = files[activeFileIndex];
+    if (currentFile) {
+      navigator.clipboard.writeText(currentFile.content);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
+  const handleDownload = () => {
+    const currentFile = files[activeFileIndex];
+    if (!currentFile) return;
+    const blob = new Blob([currentFile.content], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = currentFile.name;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const quickPrompts = [
+    { title: 'High-Performance LRU Cache', lang: 'Python', prompt: 'Implement a thread-safe LRU Cache in Python with O(1) get and put, complete with unit tests.' },
+    { title: 'Interactive Analytics Dashboard', lang: 'HTML/JS', prompt: 'Build a standalone HTML/CSS/JS responsive analytics dashboard with clean monochrome cards and live chart rendering.' },
+    { title: 'Red-Black Tree', lang: 'C++', prompt: 'Implement a complete Red-Black Tree in C++ with insertion, balancing rotations, and complexity analysis.' },
+    { title: 'Fast Fibonacci via Matrix Exponentiation', lang: 'Python', prompt: 'Write an O(log n) Fibonacci calculator in Python using 2x2 matrix exponentiation.' }
+  ];
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // 1. Initial State: Editor is HIDDEN, Display Ask Astra Code Agent Prompt
+  // ─────────────────────────────────────────────────────────────────────────────
+  if (!hasGeneratedCode) {
+    return (
+      <div className="flex-1 flex flex-col h-full bg-[#050B14] text-slate-100 overflow-y-auto">
+        {/* Top Navbar */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-white/10 backdrop-blur-md">
+          <div className="flex items-center space-x-3">
+            <button
+              onClick={onBackToChat}
+              className="p-2 hover:bg-white/10 rounded-lg text-slate-400 hover:text-white transition-all flex items-center space-x-2"
+            >
+              <ArrowLeft className="w-5 h-5" />
+              <span className="text-sm font-medium">Back to Chat</span>
+            </button>
+            <div className="h-4 w-px bg-white/20" />
+            <div className="flex items-center space-x-2">
+              <Code2 className="w-5 h-5 text-slate-300" />
+              <span className="text-sm font-semibold tracking-wide text-white">ASTRA CODE AGENT</span>
+              <span className="px-2 py-0.5 text-xs bg-white/5 text-slate-300 border border-white/10 rounded-full font-mono">
+                Independent Mode
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* Hero Section */}
+        <div className="max-w-4xl mx-auto w-full px-6 py-12 flex-1 flex flex-col justify-center">
+          <div className="text-center mb-8">
+            <div className="inline-flex p-3 rounded-2xl bg-white/5 border border-white/10 text-slate-300 mb-4">
+              <Code2 className="w-8 h-8" />
+            </div>
+            <h1 className="text-3xl sm:text-4xl font-bold text-white tracking-tight">
+              Ask Astra to Architect & Code
+            </h1>
+            <p className="text-slate-400 mt-2 max-w-xl mx-auto text-sm sm:text-base">
+              Autonomous polyglot software engineering. Multi-file synthesis, algorithmic proofs, syntax verification, and execution.
+            </p>
+          </div>
+
+          {/* Ask Astra Code Input */}
+          <div className="bg-[#070d18] border border-white/10 rounded-2xl p-3 shadow-xl backdrop-blur-xl relative focus-within:border-white/20 transition-all">
+            <textarea
+              value={promptInput}
+              onChange={(e) => setPromptInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  handleGenerateCode();
+                }
+              }}
+              placeholder="Describe your program, algorithm, or multi-file project in Python, JavaScript, HTML, C, C++..."
+              rows={4}
+              className="w-full bg-transparent text-slate-100 placeholder-slate-500 text-sm sm:text-base resize-none focus:outline-none p-2 font-mono"
+            />
+            <div className="flex items-center justify-between pt-2 border-t border-white/5">
+              <div className="flex items-center space-x-2 text-xs text-slate-400 font-mono">
+                <span className="px-2 py-1 bg-white/5 rounded">Python</span>
+                <span className="px-2 py-1 bg-white/5 rounded">JavaScript</span>
+                <span className="px-2 py-1 bg-white/5 rounded">C</span>
+                <span className="px-2 py-1 bg-white/5 rounded">C++</span>
+                <span className="px-2 py-1 bg-white/5 rounded">HTML/CSS</span>
+              </div>
+              <button
+                onClick={() => handleGenerateCode()}
+                disabled={isGenerating || !promptInput.trim()}
+                className="flex items-center space-x-2 px-5 py-2.5 bg-white/10 hover:bg-white/15 border border-white/20 text-white rounded-xl font-medium text-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isGenerating ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin text-slate-300" />
+                    <span>Architecting Code...</span>
+                  </>
+                ) : (
+                  <>
+                    <Code2 className="w-4 h-4 text-slate-300" />
+                    <span>Generate in Editor</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+
+          {/* Quick Prompts */}
+          <div className="mt-8 grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {quickPrompts.map((q, i) => (
+              <button
+                key={i}
+                onClick={() => {
+                  setPromptInput(q.prompt);
+                  handleGenerateCode(q.prompt);
+                }}
+                className="p-4 bg-[#070d18] hover:bg-white/5 border border-white/10 hover:border-white/20 rounded-xl text-left transition-all group"
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-mono font-medium text-slate-300">{q.lang}</span>
+                  <Code2 className="w-3.5 h-3.5 text-slate-500 group-hover:text-slate-300 transition-colors" />
+                </div>
+                <h3 className="text-sm font-semibold text-slate-200 mt-1">{q.title}</h3>
+                <p className="text-xs text-slate-400 mt-1 line-clamp-2">{q.prompt}</p>
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // 2. Code Generated: Monaco Editor is Active!
+  // ─────────────────────────────────────────────────────────────────────────────
+  const currentFile = files[activeFileIndex] || files[0];
 
   return (
-    <div className="relative w-full h-full flex flex-col p-4 sm:p-6 md:p-8 select-none overflow-hidden font-victor animate-in fade-in duration-200">
-      
-      {/* Top Bar: Close (✕) & "Ask ASTRX" Capsule */}
-      <div className="flex items-center justify-between mb-4 shrink-0">
-        <button
-          onClick={onBackToChat}
-          title="Exit Studio"
-          className="w-9 h-9 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-all cursor-pointer shadow-md hover:scale-105"
-        >
-          <X size={17} />
-        </button>
+    <div className="flex-1 flex flex-col h-full bg-[#050B14] text-slate-100 overflow-hidden">
+      {/* Top Navbar */}
+      <div className="flex items-center justify-between px-4 py-2.5 border-b border-white/10 bg-[#070d18] backdrop-blur-md">
+        <div className="flex items-center space-x-3">
+          <button
+            onClick={() => setHasGeneratedCode(false)}
+            className="p-1.5 hover:bg-white/10 rounded-lg text-slate-400 hover:text-white transition-all flex items-center space-x-1.5 text-xs font-medium"
+            title="Ask a new programming question"
+          >
+            <Plus className="w-4 h-4 text-slate-300" />
+            <span>New Prompt</span>
+          </button>
+          <div className="h-4 w-px bg-white/20" />
+          {/* Multi-file tabs */}
+          <div className="flex items-center space-x-1.5 overflow-x-auto max-w-md">
+            {files.map((file, idx) => (
+              <button
+                key={idx}
+                onClick={() => setActiveFileIndex(idx)}
+                className={`flex items-center space-x-2 px-3 py-1.5 rounded-lg text-xs font-mono transition-all ${
+                  activeFileIndex === idx
+                    ? 'bg-white/15 border border-white/25 text-white'
+                    : 'bg-white/5 hover:bg-white/10 text-slate-400'
+                }`}
+              >
+                <FileCode className="w-3.5 h-3.5 text-slate-300" />
+                <span>{file.name}</span>
+              </button>
+            ))}
+          </div>
+        </div>
 
-        {/* Ask ASTRX AI Button & Floating Prompt Input */}
-        <div className="relative">
-          {isAiPromptOpen ? (
-            <form
-              onSubmit={handleAskAstrxSubmit}
-              className="flex items-center gap-2 bg-[#1c222c] border border-white/15 rounded-full pl-3.5 pr-1.5 py-1 shadow-2xl animate-in fade-in zoom-in-95 duration-150"
+        {/* Actions */}
+        <div className="flex items-center space-x-2">
+          {isRunning ? (
+            <button
+              onClick={handleStopCode}
+              className="flex items-center space-x-1.5 px-3 py-1.5 bg-red-600/20 hover:bg-red-600/30 border border-red-500/40 text-red-300 rounded-lg text-xs font-medium transition-all"
+              title="Stop Execution"
             >
-              <Sparkles size={13} className="text-white/60 shrink-0" />
-              <input
-                type="text"
-                autoFocus
-                value={aiPrompt}
-                onChange={(e) => setAiPrompt(e.target.value)}
-                placeholder={`Ask ASTRX to write ${language} code...`}
-                className="bg-transparent text-xs font-victor text-white placeholder:text-white/30 focus:outline-none w-56 sm:w-72"
-              />
-              <button
-                type="submit"
-                disabled={isGenerating || !aiPrompt.trim()}
-                className="w-7 h-7 rounded-full bg-white/20 hover:bg-white/30 text-white flex items-center justify-center transition-colors cursor-pointer shrink-0 disabled:opacity-40"
-              >
-                {isGenerating ? <Loader2 size={13} className="animate-spin" /> : <ArrowRight size={13} />}
-              </button>
-              <button
-                type="button"
-                onClick={() => setIsAiPromptOpen(false)}
-                className="p-1 text-white/40 hover:text-white transition-colors cursor-pointer"
-              >
-                <X size={13} />
-              </button>
-            </form>
+              <Square className="w-3.5 h-3.5 fill-current" />
+              <span>Stop</span>
+            </button>
           ) : (
             <button
-              onClick={() => setIsAiPromptOpen(true)}
-              className="px-3.5 py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white text-xs flex items-center gap-1.5 border border-white/[0.08] transition-all cursor-pointer shadow-md hover:scale-105"
+              onClick={handleRunCode}
+              className="flex items-center space-x-1.5 px-3 py-1.5 bg-white/10 hover:bg-white/15 border border-white/20 text-slate-200 rounded-lg text-xs font-medium transition-all"
+              title="Execute Code in Sandbox"
             >
-              <Sparkles size={13} className="text-white/70" />
-              <span>Ask ASTRX</span>
+              <Play className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Run</span>
             </button>
           )}
+
+          <button
+            onClick={handleCopy}
+            className="flex items-center space-x-1.5 px-3 py-1.5 bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 rounded-lg text-xs font-medium transition-all"
+            title="Copy Code"
+          >
+            {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+            <span>{copied ? 'Copied' : 'Copy'}</span>
+          </button>
+          <button
+            onClick={handleDownload}
+            className="p-1.5 bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 rounded-lg text-xs transition-all"
+            title="Download File"
+          >
+            <Download className="w-4 h-4" />
+          </button>
+          <div className="h-4 w-px bg-white/20" />
+          <button
+            onClick={onBackToChat}
+            className="p-1.5 hover:bg-white/10 rounded-lg text-slate-400 hover:text-white transition-all text-xs"
+          >
+            Exit Code Mode
+          </button>
         </div>
       </div>
 
-      {/* Two Standalone Floating Panes (NO Outer Enclosure Box) */}
-      <div className="flex-1 w-full grid grid-cols-1 md:grid-cols-2 gap-4 min-h-0">
-        
-        {/* LEFT PANE: Code Editor */}
-        <div 
-          className="flex flex-col rounded-2xl border border-white/[0.08] overflow-hidden shadow-2xl"
-          style={{
-            backgroundColor: '#1c222c',
-          }}
-        >
-          {/* Editor Header Bar */}
-          <div className="h-11 px-4 flex items-center justify-between border-b border-white/[0.06] shrink-0 bg-white/[0.02]">
-            <div className="relative">
-              <button
-                onClick={() => setIsLangDropdownOpen(!isLangDropdownOpen)}
-                className="flex items-center gap-2 text-xs text-white/80 hover:text-white transition-colors cursor-pointer"
-              >
-                <span className="text-white/40 font-mono text-[11px]">&lt;/&gt;</span>
-                <span className="font-medium capitalize">{language}</span>
-                <ChevronDown size={13} className="text-white/40" />
-              </button>
-
-              {/* Language dropdown */}
-              {isLangDropdownOpen && (
-                <div 
-                  className="absolute top-full left-0 mt-2 w-44 rounded-[20px] p-1.5 shadow-2xl z-50 animate-in fade-in zoom-in-95 duration-150 select-none text-[12px] font-victor"
-                  style={{
-                    background: 'rgba(20, 22, 28, 0.90)',
-                    backdropFilter: 'blur(40px) saturate(140%)',
-                    WebkitBackdropFilter: 'blur(40px) saturate(140%)',
-                    border: 'none',
-                    boxShadow: '0 24px 48px -12px rgba(0, 0, 0, 0.75)'
-                  }}
-                >
-                  <div className="flex flex-col gap-0.5">
-                    {['python', 'javascript', 'html'].map((langKey) => (
-                      <button
-                        key={langKey}
-                        onClick={() => handleLanguageChange(langKey)}
-                        className={`w-full text-left px-3 h-8 rounded-[14px] transition-all duration-150 cursor-pointer flex items-center justify-between capitalize ${
-                          language === langKey 
-                            ? 'bg-white/[0.08] text-white font-medium' 
-                            : 'text-white/65 hover:text-white hover:bg-white/[0.05]'
-                        }`}
-                      >
-                        <span>{langKey === 'html' ? 'HTML / Web' : langKey}</span>
-                        {language === langKey && <Check size={13} className="text-emerald-400" strokeWidth={2.4} />}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Clear Button */}
-            <button
-              onClick={handleClear}
-              title="Clear editor"
-              className="px-3 py-1 rounded-full bg-white/10 hover:bg-white/20 text-white/70 hover:text-white text-xs transition-colors cursor-pointer"
-            >
-              Clear
-            </button>
-          </div>
-
-          {/* Editor Body with Line Numbers */}
-          <div className="flex-1 flex overflow-hidden relative">
-            {/* Line Numbers Column */}
-            <div className="w-10 py-3 select-none text-right pr-3 font-mono text-xs text-white/20 border-r border-white/[0.04] shrink-0 overflow-hidden leading-relaxed">
-              {linesArray.map((lineNum) => (
-                <div key={lineNum}>{lineNum}</div>
-              ))}
-            </div>
-
-            {/* Code Input Textarea */}
-            <div className="flex-1 relative p-3 overflow-auto scrollbar-edge">
-              <textarea
-                value={code}
-                onChange={(e) => setCode(e.target.value)}
-                placeholder="# Enter or write code here..."
-                spellCheck="false"
-                className="w-full h-full bg-transparent text-xs font-mono text-white/90 placeholder:text-white/20 resize-none focus:outline-none leading-relaxed selection:bg-white/20"
-                style={{
-                  minHeight: '100%',
-                  tabSize: 4
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Tab') {
-                    e.preventDefault();
-                    const start = e.target.selectionStart;
-                    const end = e.target.selectionEnd;
-                    const newCode = code.substring(0, start) + '    ' + code.substring(end);
-                    setCode(newCode);
-                    setTimeout(() => {
-                      e.target.selectionStart = e.target.selectionEnd = start + 4;
-                    }, 0);
-                  }
-                }}
-              />
-            </div>
-          </div>
+      {/* Main Split: Monaco Editor (Left) & Explanation / Output Panel (Right) */}
+      <div className="flex-1 flex flex-col lg:flex-row overflow-hidden">
+        {/* Left: Monaco Editor */}
+        <div className="flex-1 h-full min-h-[350px] relative border-b lg:border-b-0 lg:border-r border-white/10">
+          <Editor
+            height="100%"
+            language={currentFile.language}
+            theme="vs-dark"
+            value={currentFile.content}
+            onChange={(val) => {
+              setFiles(prev => prev.map((f, i) => i === activeFileIndex ? { ...f, content: val || '' } : f));
+            }}
+            options={{
+              minimap: { enabled: false },
+              fontSize: 13,
+              fontFamily: "'Victor Mono', 'JetBrains Mono', Consolas, monospace",
+              lineNumbers: 'on',
+              scrollBeyondLastLine: false,
+              automaticLayout: true,
+              tabSize: 2,
+              padding: { top: 12, bottom: 12 }
+            }}
+          />
         </div>
 
-        {/* RIGHT PANE: Output Console & Live Runner */}
-        <div 
-          className="flex flex-col rounded-2xl border border-white/[0.08] overflow-hidden shadow-2xl"
-          style={{
-            backgroundColor: '#1c222c',
-          }}
-        >
-          {/* Console Header Bar */}
-          <div className="h-11 px-4 flex items-center justify-between border-b border-white/[0.06] shrink-0 bg-white/[0.02]">
-            <div className="flex items-center gap-2 text-xs">
-              <span className="text-white/40 font-mono text-[11px]">&lt;/&gt;</span>
-              <span className="font-medium text-white/80">Console</span>
-
-              {language === 'html' && (
-                <div className="flex items-center gap-1 ml-3 bg-white/5 p-0.5 rounded-lg">
-                  <button
-                    onClick={() => setActiveTab('console')}
-                    className={`px-2 py-0.5 rounded-md text-[10px] transition-colors cursor-pointer ${
-                      activeTab === 'console' ? 'bg-white/15 text-white' : 'text-white/50'
-                    }`}
-                  >
-                    Logs
-                  </button>
-                  <button
-                    onClick={() => setActiveTab('preview')}
-                    className={`px-2 py-0.5 rounded-md text-[10px] transition-colors cursor-pointer ${
-                      activeTab === 'preview' ? 'bg-white/15 text-white' : 'text-white/50'
-                    }`}
-                  >
-                    Preview
-                  </button>
-                </div>
-              )}
-            </div>
-
-            {/* Copy & Run Actions */}
-            <div className="flex items-center gap-2">
+        {/* Right: Tabbed Inspector Panel (Explanation | Console | Dependencies | Live Preview) */}
+        <div className="w-full lg:w-[450px] flex flex-col bg-[#070d18] border-l border-white/10">
+          {/* Panel Selector */}
+          <div className="flex items-center border-b border-white/10 px-3 bg-slate-900/50">
+            <button
+              onClick={() => setActivePanel('explanation')}
+              className={`flex items-center space-x-1.5 px-3 py-2 text-xs font-medium border-b-2 transition-all ${
+                activePanel === 'explanation' ? 'border-white text-white' : 'border-transparent text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Cpu className="w-3.5 h-3.5" />
+              <span>Explanation & Complexity</span>
+            </button>
+            <button
+              onClick={() => setActivePanel('console')}
+              className={`flex items-center space-x-1.5 px-3 py-2 text-xs font-medium border-b-2 transition-all ${
+                activePanel === 'console' ? 'border-white text-white' : 'border-transparent text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Terminal className="w-3.5 h-3.5" />
+              <span>Console</span>
+            </button>
+            {currentFile.language === 'python' && (
               <button
-                onClick={handleCopy}
-                title="Copy code"
-                className="p-1.5 rounded-lg text-white/40 hover:text-white hover:bg-white/5 transition-colors cursor-pointer"
+                onClick={() => setActivePanel('dependencies')}
+                className={`flex items-center space-x-1.5 px-3 py-2 text-xs font-medium border-b-2 transition-all ${
+                  activePanel === 'dependencies' ? 'border-white text-white' : 'border-transparent text-slate-400 hover:text-slate-200'
+                }`}
               >
-                {copied ? <Check size={14} className="text-emerald-400" /> : <Copy size={14} />}
+                <Package className="w-3.5 h-3.5" />
+                <span>Dependencies</span>
               </button>
-
+            )}
+            {currentFile.language === 'html' && (
               <button
-                onClick={handleRun}
-                disabled={isRunning}
-                className="px-4 py-1 rounded-full bg-white/20 hover:bg-white/30 text-white font-medium text-xs flex items-center gap-1.5 transition-all cursor-pointer shadow-md hover:scale-105 active:scale-95"
+                onClick={() => setActivePanel('preview')}
+                className={`flex items-center space-x-1.5 px-3 py-2 text-xs font-medium border-b-2 transition-all ${
+                  activePanel === 'preview' ? 'border-white text-white' : 'border-transparent text-slate-400 hover:text-slate-200'
+                }`}
               >
-                <Play size={11} fill="currentColor" />
-                <span>{isRunning ? 'Running...' : 'Run'}</span>
+                <Eye className="w-3.5 h-3.5" />
+                <span>Live Preview</span>
               </button>
-            </div>
+            )}
           </div>
 
-          {/* Console Output Body */}
-          <div className="flex-1 p-4 overflow-auto scrollbar-edge font-mono text-xs leading-relaxed">
-            {language === 'html' && activeTab === 'preview' ? (
-              <iframe
-                srcDoc={code}
-                title="Web Preview"
-                sandbox="allow-scripts"
-                className="w-full h-full rounded-xl border border-white/5 bg-black/40"
-              />
-            ) : consoleLogs.length === 0 ? (
-              <div className="h-full flex items-center justify-center text-white/20 text-xs">
-                Click "Run" to execute code
-              </div>
-            ) : (
-              <div className="space-y-1 text-white/60">
-                {consoleLogs.map((line, idx) => {
-                  const isRunStarted = line.startsWith('Run started');
-                  const isCompleted = line.startsWith('Run completed');
-                  const isFailed = line.startsWith('Run failed') || line.startsWith('Traceback') || line.startsWith('Uncaught');
-                  const isStandard = !isRunStarted && !isCompleted && !isFailed && !line.startsWith('Initializing') && !line.startsWith('Installing') && !line.startsWith('Running');
-
-                  return (
-                    <div 
-                      key={idx}
-                      className={
-                        isCompleted
-                          ? 'text-emerald-400 font-medium mt-2'
-                          : isFailed
-                          ? 'text-rose-400 font-medium'
-                          : isStandard
-                          ? 'text-white'
-                          : 'text-white/40'
-                      }
-                    >
-                      {line}
-                    </div>
-                  );
-                })}
+          {/* Panel Content */}
+          <div className="flex-1 p-4 overflow-y-auto text-xs leading-relaxed">
+            {activePanel === 'explanation' && (
+              <div className="space-y-4">
+                <div className="p-3 bg-white/5 border border-white/10 rounded-xl">
+                  <span className="text-[11px] font-mono font-medium text-slate-400 uppercase tracking-wider">
+                    Language: {currentFile.language.toUpperCase()}
+                  </span>
+                  <h4 className="text-sm font-semibold text-white mt-1">{currentFile.name}</h4>
+                </div>
+                <div className="text-slate-300 font-mono whitespace-pre-wrap">
+                  {explanation}
+                </div>
               </div>
             )}
+
+            {activePanel === 'console' && (
+              <div className="font-mono text-slate-300 bg-black/60 p-3 rounded-xl border border-white/5 h-full overflow-y-auto whitespace-pre-wrap">
+                {consoleOutput || 'Click "Run" to execute current editor contents inside the sandboxed environment.'}
+              </div>
+            )}
+
+            {activePanel === 'dependencies' && (
+              <div className="space-y-3">
+                <div className="p-3 bg-white/5 border border-white/10 rounded-xl">
+                  <h4 className="text-sm font-semibold text-white">Detected Libraries</h4>
+                  <p className="text-slate-400 text-[11px] mt-0.5">
+                    Analyzes import statements in your code and manages package installation inside the sandbox.
+                  </p>
+                </div>
+
+                {dependencies.length === 0 ? (
+                  <p className="text-slate-400 p-2 font-mono">No external packages detected in this script.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {dependencies.map((dep, idx) => (
+                      <div key={idx} className="flex items-center justify-between p-2.5 bg-white/5 border border-white/10 rounded-lg">
+                        <div className="flex items-center space-x-2">
+                          {dep.installed ? (
+                            <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                          ) : (
+                            <AlertCircle className="w-4 h-4 text-amber-400" />
+                          )}
+                          <span className="font-mono text-white text-xs">{dep.name}</span>
+                        </div>
+                        {dep.installed ? (
+                          <span className="text-[11px] text-emerald-400 font-mono">Installed</span>
+                        ) : (
+                          <button
+                            onClick={() => handleInstallDep(dep.name)}
+                            disabled={isInstallingDep}
+                            className="px-2.5 py-1 bg-white/10 hover:bg-white/15 border border-white/20 text-white rounded text-[11px] font-mono transition-all disabled:opacity-50"
+                          >
+                            {isInstallingDep ? 'Installing...' : 'Install'}
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {activePanel === 'preview' && currentFile.language === 'html' && (
+              <div className="h-full bg-white rounded-xl overflow-hidden shadow-inner">
+                <iframe
+                  title="Web Live Preview"
+                  srcDoc={currentFile.content}
+                  className="w-full h-full border-0"
+                  sandbox="allow-scripts"
+                />
+              </div>
+            )}
+          </div>
+
+          {/* Interactive Follow-Up Input (Conversational Continuity in Code Mode) */}
+          <div className="p-3 border-t border-white/10 bg-slate-900/40">
+            <div className="flex items-center space-x-2 bg-[#050B14] border border-white/10 rounded-xl px-3 py-1.5 focus-within:border-white/25 transition-all">
+              <input
+                type="text"
+                value={followUpInput}
+                onChange={(e) => setFollowUpInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    handleGenerateCode(followUpInput);
+                  }
+                }}
+                placeholder="Modify this code (e.g. 'Optimize it', 'Explain changes', 'Add tests')..."
+                className="flex-1 bg-transparent text-slate-100 placeholder-slate-500 text-xs focus:outline-none font-mono py-1"
+              />
+              <button
+                onClick={() => handleGenerateCode(followUpInput)}
+                disabled={isGenerating || !followUpInput.trim()}
+                className="p-1.5 text-slate-400 hover:text-white transition-colors disabled:opacity-30"
+                title="Send instruction to Astra Code Agent"
+              >
+                {isGenerating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+              </button>
+            </div>
           </div>
         </div>
       </div>

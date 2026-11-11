@@ -34,9 +34,10 @@ export default function UserAccountMenu({
 
   if (!isOpen) return null;
 
-  const totalLimit = user.queryLimit || 50;
-  const queriesUsed = user.queriesUsed || 0;
-  const queriesRemaining = Math.max(0, totalLimit - queriesUsed);
+  const totalLimit = user.usage?.limit ?? 20;
+  const isUnlimited = user.usage?.is_unlimited || totalLimit === 'Unlimited' || totalLimit === 0;
+  const queriesUsed = user.usage?.billable_calls ?? (user.queriesUsed || 0);
+  const queriesRemaining = isUnlimited ? 'Unlimited' : (user.usage?.remaining ?? Math.max(0, totalLimit - queriesUsed));
 
   return (
     <div
@@ -71,9 +72,12 @@ export default function UserAccountMenu({
               {user.username || 'Astrx User'}
             </p>
             <p className={`text-[10px] truncate mt-0.5 font-mono ${
-              isLight ? 'text-slate-500' : 'text-white/45'
+              isLight ? 'text-slate-500' : 'text-white/60'
             }`}>
-              {queriesRemaining} / {totalLimit} queries left
+              API calls: {queriesUsed} {isUnlimited ? '(Unlimited)' : `/ ${totalLimit}`}
+            </p>
+            <p className={`text-[9.5px] truncate font-mono text-cyan-400`}>
+              Remaining API calls: {isUnlimited ? 'Unlimited' : queriesRemaining}
             </p>
           </div>
         </div>

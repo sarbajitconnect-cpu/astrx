@@ -14,13 +14,20 @@ function multiPageRoutingPlugin() {
     configureServer(server) {
       server.middlewares.use((req, res, next) => {
         const rawUrl = req.url || '/'
-        const [pathname, search] = rawUrl.split('?')
-        const query = search ? `?${search}` : ''
+        const [pathname] = rawUrl.split('?')
 
-        if (pathname === '/app' || pathname === '/app/') {
-          req.url = `/app.html${query}`
-        } else if (pathname === '/login' || pathname === '/login/') {
-          req.url = `/login.html${query}`
+        if (
+          pathname === '/app' ||
+          pathname === '/app/' ||
+          pathname === '/app.html' ||
+          pathname === '/login' ||
+          pathname === '/login/' ||
+          pathname === '/login.html'
+        ) {
+          res.statusCode = 302;
+          res.setHeader('Location', 'https://astrxai.com/');
+          res.end();
+          return;
         }
         next()
       });

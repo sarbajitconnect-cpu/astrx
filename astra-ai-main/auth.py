@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import re
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
+import time
 import bcrypt
 import jwt
-from fastapi import Cookie, Depends, HTTPException, Response
+from argon2 import PasswordHasher
+from argon2.exceptions import VerifyMismatchError
+from fastapi import Cookie, Depends, HTTPException, Request, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from config import settings
@@ -16,8 +21,55 @@ from database import User, get_db
 bearer = HTTPBearer(auto_error=False)
 
 SESSION_COOKIE = "astra_session"
-TOKEN_TTL = timedelta(days=30)
+GUEST_SESSION_COOKIE = "astra_guest_session"
+TOKEN_TTL = timedelta(seconds=settings.jwt_access_token_ttl_seconds)
 BCRYPT_ROUNDS = 12
+ph = PasswordHasher(time_cost=3, memory_cost=65536, parallelism=4)
+
+# Login Rate Limiting & Lockout Tracker
+LOGIN_ATTEMPTS: dict[str, dict] = {}
+MAX_LOGIN_ATTEMPTS = 5
+LOCKOUT_DURATION_SECONDS = 600  # 10 minutes temporary lockout
+
+
+def record_failed_attempt(key: str) -> tuple[int, int]:
+    """Records a failed login attempt for key (IP or identifier). Returns (remaining_attempts, lockout_seconds)."""
+    now = time.time()
+    entry = LOGIN_ATTEMPTS.get(key, {"attempts": 0, "locked_until": 0, "last_failed": 0})
+    if entry.get("locked_until", 0) > now:
+        return 0, int(entry["locked_until"] - now)
+
+    if now - entry.get("last_failed", 0) > LOCKOUT_DURATION_SECONDS:
+        entry["attempts"] = 0
+
+    entry["attempts"] += 1
+    entry["last_failed"] = now
+
+    if entry["attempts"] >= MAX_LOGIN_ATTEMPTS:
+        entry["locked_until"] = now + LOCKOUT_DURATION_SECONDS
+        LOGIN_ATTEMPTS[key] = entry
+        return 0, LOCKOUT_DURATION_SECONDS
+
+    LOGIN_ATTEMPTS[key] = entry
+    return max(0, MAX_LOGIN_ATTEMPTS - entry["attempts"]), 0
+
+
+def check_is_locked(key: str) -> int:
+    """Returns remaining lockout seconds if locked, or 0 if free to attempt."""
+    now = time.time()
+    entry = LOGIN_ATTEMPTS.get(key)
+    if not entry:
+        return 0
+    locked_until = entry.get("locked_until", 0)
+    if locked_until > now:
+        return int(locked_until - now)
+    return 0
+
+
+def clear_failed_attempts(key: str) -> None:
+    LOGIN_ATTEMPTS.pop(key, None)
+
+
 WEAK_PASSWORDS = frozenset({
     "password", "password1", "password123", "12345678", "123456789", "qwerty",
     "qwerty123", "letmein", "welcome", "admin123", "iloveyou", "abc12345",
@@ -27,18 +79,35 @@ PASSWORD_HINT = "Use at least 8 characters with a letter and a number."
 
 
 def hash_password(password: str) -> str:
-    raw = password.encode("utf-8")[:72]
-    return bcrypt.hashpw(raw, bcrypt.gensalt(rounds=BCRYPT_ROUNDS)).decode()
+    """Hashes password using secure Argon2id algorithm."""
+    return ph.hash(password)
 
 
 def verify_password(password: str, password_hash: str) -> bool:
+    """Verifies password using Argon2id with automatic fallback for legacy bcrypt hashes."""
     if not password_hash or password_hash in ("", "none"):
         return False
+    if password_hash.startswith("$argon2"):
+        try:
+            return ph.verify(password_hash, password)
+        except (VerifyMismatchError, Exception):
+            return False
+    # Fallback for legacy bcrypt hashes
     try:
         raw = password.encode("utf-8")[:72]
         return bcrypt.checkpw(raw, password_hash.encode())
     except (ValueError, TypeError):
         return False
+
+
+def needs_rehash(password_hash: str) -> bool:
+    """Returns True if hash should be upgraded to modern Argon2id settings."""
+    if not password_hash or not password_hash.startswith("$argon2"):
+        return True
+    try:
+        return ph.check_needs_rehash(password_hash)
+    except Exception:
+        return True
 
 
 def validate_password_strength(password: str) -> str | None:
@@ -59,31 +128,95 @@ def validate_password_strength(password: str) -> str | None:
     return None
 
 
-def create_access_token(user_id: str, role: str) -> str:
+def create_access_token(user_id: str, role: str, token_version: int = 1) -> str:
+    now = datetime.now(timezone.utc)
     payload = {
         "sub": user_id,
         "role": role,
-        "exp": datetime.now(timezone.utc) + TOKEN_TTL,
-        "iat": datetime.now(timezone.utc),
+        "tv": token_version,
+        "exp": now + TOKEN_TTL,
+        "iat": now,
     }
     return jwt.encode(payload, settings.jwt_secret, algorithm="HS256")
 
 
-def set_session_cookie(response: Response, token: str) -> None:
-    secure = settings.app_env.lower() in ("production", "prod")
-    response.set_cookie(
-        key=SESSION_COOKIE,
-        value=token,
-        httponly=True,
-        secure=secure,
-        samesite="lax",
-        max_age=int(TOKEN_TTL.total_seconds()),
-        path="/",
-    )
+def revoke_user_sessions(user: User, db: Session) -> None:
+    """Invalidates all currently active JWTs for user by advancing token_version."""
+    user.token_version = (user.token_version or 1) + 1
+    db.commit()
 
 
-def clear_session_cookie(response: Response) -> None:
-    response.delete_cookie(key=SESSION_COOKIE, path="/")
+def _is_secure_request(request: Request | None = None) -> bool:
+    if request is not None:
+        scheme = (request.url.scheme or "").lower()
+        forwarded_proto = (request.headers.get("x-forwarded-proto") or "").lower()
+        return scheme == "https" or "https" in forwarded_proto
+    return False
+
+
+def _cookie_domain_for_request(request: Request | None = None) -> str | None:
+    if request is None:
+        return None
+    try:
+        host = (request.headers.get("host") or request.url.netloc or "").split(":")[0].lower()
+        if host == "astrxai.com" or host.endswith(".astrxai.com"):
+            return ".astrxai.com"
+    except Exception:
+        pass
+    return None
+
+
+def set_session_cookie(
+    response: Response,
+    token: str,
+    request: Request | None = None,
+    cookie_name: str = SESSION_COOKIE,
+) -> None:
+    secure = _is_secure_request(request)
+    max_age_sec = int(TOKEN_TTL.total_seconds())
+    expires_dt = datetime.now(timezone.utc) + TOKEN_TTL
+    domain = _cookie_domain_for_request(request)
+    kwargs = {
+        "key": cookie_name,
+        "value": token,
+        "httponly": True,
+        "secure": secure,
+        "samesite": "lax",
+        "max_age": max_age_sec,
+        "expires": expires_dt,
+        "path": "/",
+    }
+    if domain:
+        kwargs["domain"] = domain
+    response.set_cookie(**kwargs)
+
+
+def clear_session_cookie(response: Response, request: Request | None = None) -> None:
+    domain = _cookie_domain_for_request(request)
+    # Clear host-level cookies
+    for c_name in (SESSION_COOKIE, GUEST_SESSION_COOKIE):
+        response.delete_cookie(key=c_name, path="/", httponly=True, samesite="lax")
+        response.set_cookie(
+            key=c_name,
+            value="",
+            max_age=0,
+            expires=datetime.fromtimestamp(0, timezone.utc),
+            path="/",
+            httponly=True,
+            samesite="lax",
+        )
+        if domain:
+            response.delete_cookie(key=c_name, path="/", domain=domain, httponly=True, samesite="lax")
+            response.set_cookie(
+                key=c_name,
+                value="",
+                max_age=0,
+                expires=datetime.fromtimestamp(0, timezone.utc),
+                path="/",
+                domain=domain,
+                httponly=True,
+                samesite="lax",
+            )
 
 
 def _decode_user(token: str | None, db: Session) -> User | None:
@@ -94,7 +227,14 @@ def _decode_user(token: str | None, db: Session) -> User | None:
         user_id = payload.get("sub")
         if not user_id:
             return None
-        return db.get(User, user_id)
+        user = db.get(User, user_id)
+        if not user:
+            return None
+        # Verify token version to enforce server-side session revocation / logout invalidation
+        token_tv = payload.get("tv")
+        if token_tv is not None and getattr(user, "token_version", 1) != token_tv:
+            return None
+        return user
     except (jwt.PyJWTError, KeyError):
         return None
 
@@ -102,48 +242,123 @@ def _decode_user(token: str | None, db: Session) -> User | None:
 def _extract_token(
     credentials: HTTPAuthorizationCredentials | None,
     cookie_token: str | None,
+    guest_header_token: str | None = None,
 ) -> str | None:
     if credentials and credentials.credentials:
         return credentials.credentials
     if cookie_token:
         return cookie_token
+    if guest_header_token:
+        return guest_header_token
+    return None
+
+
+def _resolve_authenticated_user(
+    credentials: HTTPAuthorizationCredentials | None,
+    cookie_token: str | None,
+    db: Session,
+    request: Request | None = None,
+) -> User | None:
+    """Checks Bearer token and persistent session cookie for a valid non-guest user."""
+    candidates: list[str] = []
+    if credentials and credentials.credentials:
+        candidates.append(credentials.credentials)
+    if cookie_token and cookie_token not in candidates:
+        candidates.append(cookie_token)
+    if request is not None:
+        raw_cookie = request.cookies.get(SESSION_COOKIE)
+        if raw_cookie and raw_cookie not in candidates:
+            candidates.append(raw_cookie)
+        auth_hdr = request.headers.get("authorization") or request.headers.get("Authorization")
+        if auth_hdr and auth_hdr.lower().startswith("bearer "):
+            hdr_tok = auth_hdr.split(" ", 1)[1].strip()
+            if hdr_tok and hdr_tok not in candidates:
+                candidates.append(hdr_tok)
+
+    for tok in candidates:
+        user = _decode_user(tok, db)
+        if user and user.role != "guest":
+            return user
     return None
 
 
 def get_current_user(
-    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
-    db: Annotated[Session, Depends(get_db)],
-    astra_session: Annotated[str | None, Cookie(alias=SESSION_COOKIE)] = None,
+    request: Request,
+    response: Response,
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
+    db: Session = Depends(get_db),
+    astra_session: str | None = Cookie(default=None, alias=SESSION_COOKIE),
 ) -> User:
-    user = _decode_user(_extract_token(credentials, astra_session), db)
+    user = _resolve_authenticated_user(credentials, astra_session, db, request=request)
     if not user:
         raise HTTPException(401, "Sign in is required")
+    # Slide persistent session cookie on authenticated requests so active users stay logged in
+    refreshed_token = create_access_token(user.id, user.role, getattr(user, "token_version", 1))
+    set_session_cookie(response, refreshed_token, request=request, cookie_name=SESSION_COOKIE)
     return user
 
 
 def get_optional_user(
-    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
-    db: Annotated[Session, Depends(get_db)],
-    astra_session: Annotated[str | None, Cookie(alias=SESSION_COOKIE)] = None,
+    request: Request,
+    response: Response,
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
+    db: Session = Depends(get_db),
+    astra_session: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+    astra_guest_session: str | None = Cookie(default=None, alias=GUEST_SESSION_COOKIE),
 ) -> User:
-    """Authenticated user, or default anonymous session. Never requires login."""
-    user = _decode_user(_extract_token(credentials, astra_session), db)
-    if user:
-        return user
-    anon = db.get(User, "anonymous")
-    if not anon:
-        anon = User(id="anonymous", email="guest@astrx.ai", username="guest", role="user")
-        db.add(anon)
-        try:
-            db.commit()
-            db.refresh(anon)
-        except Exception:
-            db.rollback()
-            anon = db.get(User, "anonymous")
-    return anon
+    """Return the signed-in user or create an isolated per-device local guest session.
 
+    Authenticated user sessions (astra_session) are strictly isolated from guest
+    sessions (astra_guest_session) so guest activity can never overwrite or
+    invalidate a signed-in user's persistent cookie.
+    """
+    auth_user = _resolve_authenticated_user(credentials, astra_session, db, request=request)
+    if auth_user:
+        refreshed_token = create_access_token(auth_user.id, auth_user.role, getattr(auth_user, "token_version", 1))
+        set_session_cookie(response, refreshed_token, request=request, cookie_name=SESSION_COOKIE)
+        return auth_user
 
-def require_admin(user: Annotated[User, Depends(get_current_user)]) -> User:
-    if user.role != "admin":
-        raise HTTPException(403, "Administrator access is required")
+    guest_header = request.headers.get("X-Guest-Token")
+    device_header = request.headers.get("X-Device-Id")
+
+    for guest_tok in (
+        credentials.credentials if credentials and credentials.credentials else None,
+        guest_header,
+        astra_guest_session,
+        astra_session,
+    ):
+        if guest_tok:
+            guest_user = _decode_user(guest_tok, db)
+            if guest_user and guest_user.role == "guest":
+                user_token = create_access_token(guest_user.id, guest_user.role, getattr(guest_user, "token_version", 1))
+                response.headers["X-Guest-Token"] = user_token
+                response.headers["Access-Control-Expose-Headers"] = "X-Guest-Token"
+                set_session_cookie(response, user_token, request=request, cookie_name=GUEST_SESSION_COOKIE)
+                return guest_user
+
+    if device_header:
+        dev_email = f"guest-{device_header}@device.local"
+        existing = db.scalar(select(User).where(User.email == dev_email))
+        if existing:
+            user_token = create_access_token(existing.id, existing.role, getattr(existing, "token_version", 1))
+            response.headers["X-Guest-Token"] = user_token
+            response.headers["Access-Control-Expose-Headers"] = "X-Guest-Token"
+            set_session_cookie(response, user_token, request=request, cookie_name=GUEST_SESSION_COOKIE)
+            return existing
+
+    guest_id = device_header if device_header else uuid.uuid4().hex
+    user = User(
+        email=f"guest-{guest_id}@device.local",
+        username="Guest",
+        role="guest",
+        token_version=1,
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    guest_token = create_access_token(user.id, user.role, user.token_version)
+    response.headers["X-Guest-Token"] = guest_token
+    response.headers["Access-Control-Expose-Headers"] = "X-Guest-Token"
+    set_session_cookie(response, guest_token, request=request, cookie_name=GUEST_SESSION_COOKIE)
     return user

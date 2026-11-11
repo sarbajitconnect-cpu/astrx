@@ -43,3 +43,5 @@ venv/
 *.njsproj
 *.sln
 *.sw?
+.vercel
+.env*

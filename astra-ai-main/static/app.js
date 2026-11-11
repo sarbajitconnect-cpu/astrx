@@ -1,9 +1,36 @@
 (() => {
   const $ = (id) => document.getElementById(id);
-  let token = localStorage.getItem('aster_token') || '';
+  // Security hardening: never store long-lived bearer tokens in localStorage.
+  // Purge any legacy tokens from previous versions immediately.
+  try {
+    localStorage.removeItem('aster_token');
+    localStorage.removeItem('astra_guest_token');
+  } catch (_) {}
+
+  let token = '';
   let cachedUsername = localStorage.getItem('aster_username') || '';
   let user = null;
+  try {
+    const storedUser = localStorage.getItem('aster_user');
+    if (storedUser) user = JSON.parse(storedUser);
+  } catch (_) {}
+  let isAuthenticated = Boolean(user && user.role && user.role !== 'guest');
+  let authInitialized = false;
   let authMode = 'login';
+  let attachedImage = null; // { base64: string, url: string, name: string }
+
+  // Device-bound identifier (non-secret) & in-memory guest token fallback
+  let guestToken = '';
+  let deviceId = localStorage.getItem('astra_device_id') || '';
+  if (!deviceId) {
+    deviceId = 'dev_' + (window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID() : (Math.random().toString(36).substring(2) + Date.now().toString(36)));
+    localStorage.setItem('astra_device_id', deviceId);
+  }
+
+  // Auto-reset API base if on localhost so requests always go to local server
+  if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+    localStorage.removeItem('astra_api_base_url');
+  }
 
   // Configurable base URL for remote cloud deployment & Android mobile client
   const getApiBase = () => {
@@ -16,11 +43,17 @@
       throw new Error('Unable to connect to Astra. Please check your internet connection.');
     }
     const headers = { ...(options.headers || {}) };
-    if (token) headers.Authorization = `Bearer ${token}`;
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+    } else if (!isAuthenticated && guestToken) {
+      headers['X-Guest-Token'] = guestToken;
+    }
+    headers['X-Device-Id'] = deviceId;
+
     const fullUrl = path.startsWith('http') ? path : `${getApiBase()}${path}`;
     let response;
     try {
-      response = await fetch(fullUrl, { ...options, headers });
+      response = await fetch(fullUrl, { credentials: 'include', ...options, headers });
     } catch (err) {
       const msg = (typeof navigator !== 'undefined' && navigator.onLine === false)
         ? 'Unable to connect to Astra. Please check your internet connection.'
@@ -28,13 +61,21 @@
       toast(msg, true);
       throw new Error(msg);
     }
+
+    const serverGuestToken = response.headers && response.headers.get('X-Guest-Token');
+    if (serverGuestToken && !isAuthenticated) {
+      guestToken = serverGuestToken;
+    }
     const body = await response.json().catch(() => ({}));
     if (!response.ok) {
       if (response.status === 502 || response.status === 503) {
         toast('Astra is temporarily unavailable. Please try again.', true);
         throw new Error('Astra is temporarily unavailable. Please try again.');
       }
-      throw new Error(body.detail || body.error || `Request failed (${response.status})`);
+      const err = new Error(body.detail || body.error || `Request failed (${response.status})`);
+      err.status = response.status;
+      err.body = body;
+      throw err;
     }
     return body;
   };
@@ -52,6 +93,93 @@
     node.style.background = isError ? '#e11d48' : '#ec4899';
     node.classList.remove('hidden');
     setTimeout(() => node.classList.add('hidden'), 4200);
+  };
+
+  let tokenStatus = {
+    is_logged_in: false,
+    daily_limit: 5,
+    tokens_used: 0,
+    tokens_remaining: 5,
+    out_of_tokens: false,
+    reset_seconds: 86400,
+  };
+
+  const updateTokenDisplay = (status) => {
+    if (!status) return;
+    tokenStatus = { ...tokenStatus, ...status };
+
+    const badge = $('tokenBadge');
+    const badgeText = $('tokenBadgeText');
+    const banner = $('outOfTokensBanner');
+    const bannerTitle = $('outOfTokensTitle');
+    const bannerMsg = $('outOfTokensMsg');
+    const bannerBtn = $('outOfTokensActionBtn');
+    const composerCard = document.querySelector('.composer-floating-card');
+    const sendBtn = $('sendButton');
+    const homeSendBtn = $('composerHomeSendBtn');
+    const msgInput = $('message');
+
+    const remaining = typeof tokenStatus.tokens_remaining === 'number' ? tokenStatus.tokens_remaining : 0;
+    const limit = typeof tokenStatus.daily_limit === 'number' ? tokenStatus.daily_limit : (tokenStatus.is_logged_in ? 20 : 5);
+    const isOutOfTokens = Boolean(tokenStatus.out_of_tokens || remaining <= 0);
+
+    if (badgeText) {
+      badgeText.textContent = `${remaining}/${limit} tokens`;
+    }
+    if (badge) {
+      badge.classList.remove('low', 'empty');
+      if (isOutOfTokens) {
+        badge.classList.add('empty');
+      } else if (remaining <= 2) {
+        badge.classList.add('low');
+      }
+    }
+
+    if (banner) {
+      if (isOutOfTokens) {
+        banner.classList.remove('hidden');
+        if (!tokenStatus.is_logged_in) {
+          if (bannerTitle) bannerTitle.textContent = 'Out of tokens';
+          if (bannerMsg) bannerMsg.textContent = `You have used all ${tokenStatus.daily_limit} free guest tokens for today. Log in to get more tokens per day!`;
+          if (bannerBtn) {
+            bannerBtn.classList.remove('hidden');
+            bannerBtn.textContent = 'Log In / Sign Up';
+            bannerBtn.onclick = () => {
+              if ($('authModal')) $('authModal').classList.remove('hidden');
+            };
+          }
+        } else {
+          if (bannerTitle) bannerTitle.textContent = 'Out of tokens';
+          const hrs = Math.max(1, Math.ceil((tokenStatus.reset_seconds || 86400) / 3600));
+          if (bannerMsg) bannerMsg.textContent = `You have used all ${tokenStatus.daily_limit} tokens for today. Resets in approximately ${hrs} hour${hrs === 1 ? '' : 's'}.`;
+          if (bannerBtn) bannerBtn.classList.add('hidden');
+        }
+
+        if (composerCard) composerCard.classList.add('out-of-tokens');
+        if (msgInput) msgInput.placeholder = 'Out of tokens for today';
+        if (sendBtn) sendBtn.disabled = true;
+        if (homeSendBtn) homeSendBtn.disabled = true;
+      } else {
+        banner.classList.add('hidden');
+        if (composerCard) composerCard.classList.remove('out-of-tokens');
+        if (msgInput && msgInput.placeholder === 'Out of tokens for today') {
+          msgInput.placeholder = 'Type here';
+        }
+        if (sendBtn) sendBtn.disabled = false;
+        if (homeSendBtn) homeSendBtn.disabled = false;
+      }
+    }
+  };
+
+  const fetchTokenStatus = async () => {
+    try {
+      const data = await api('/api/tokens/status');
+      if (data && typeof data.tokens_remaining !== 'undefined') {
+        updateTokenDisplay(data);
+      }
+    } catch (e) {
+      console.warn('Failed to fetch token status:', e);
+    }
   };
 
   const escapeHtml = (text) =>
@@ -149,47 +277,68 @@
       }
     }
   }
+  // Function to render a single math chunk with KaTeX and clean Unicode fallback
+  const formatLatexChunk = (tex, isBlock) => {
+    const trimmed = (tex || '').trim();
+    if (!trimmed) return '';
+    if (window.katex && typeof window.katex.renderToString === 'function') {
+      try {
+        return window.katex.renderToString(trimmed, {
+          displayMode: isBlock,
+          throwOnError: false,
+        });
+      } catch (e) {
+        // Fallback below
+      }
+    }
+    // Readable clean text fallback when KaTeX isn't loaded:
+    let clean = trimmed
+      .replace(/\\mathbf\{([^}]+)\}/g, '$1')
+      .replace(/\\mathit\{([^}]+)\}/g, '$1')
+      .replace(/\\text\{([^}]+)\}/g, '$1')
+      .replace(/\\left\[/g, '[')
+      .replace(/\\right\]/g, ']')
+      .replace(/\\left\(/g, '(')
+      .replace(/\\right\)/g, ')')
+      .replace(/\\left/g, '')
+      .replace(/\\right/g, '')
+      .replace(/\\int_\{([^}]+)\}\^\{([^}]+)\}\s*/g, '∫[$1 to $2] ')
+      .replace(/\\int\^\{([^}]+)\}_\{([^}]+)\}\s*/g, '∫[$2 to $1] ')
+      .replace(/\\int\s*/g, '∫ ')
+      .replace(/\\frac\s*\{([^}]+)\}\s*\{([^}]+)\}/g, '($1 / $2)')
+      .replace(/\\neq\s*/g, ' ≠ ')
+      .replace(/\\leq\s*/g, ' ≤ ')
+      .replace(/\\geq\s*/g, ' ≥ ')
+      .replace(/\\times\s*/g, ' × ')
+      .replace(/\\cdot\s*/g, ' · ')
+      .replace(/\\pm\s*/g, ' ± ')
+      .replace(/\\infty\s*/g, '∞')
+      .replace(/\\sqrt\s*\{([^}]+)\}/g, '√($1)')
+      .replace(/\\sin\b/g, 'sin')
+      .replace(/\\cos\b/g, 'cos')
+      .replace(/\\tan\b/g, 'tan')
+      .replace(/\\ln\b/g, 'ln')
+      .replace(/\\log\b/g, 'log')
+      .replace(/\\pi\b/g, 'π')
+      .replace(/\\\s*/g, ' ')
+      .replace(/\\,/g, ' ')
+      .replace(/\\;/g, ' ')
+      .replace(/\\quad/g, '  ')
+      .replace(/\^\{([^}]+)\}/g, '^$1')
+      .replace(/_\{([^}]+)\}/g, '_$1')
+      .replace(/\\/g, '');
+    return `<span class="math-fallback-chunk" style="font-family: 'DM Mono', monospace; font-weight: 600; color: #38bdf8; background: rgba(56, 189, 248, 0.12); padding: 2px 6px; border-radius: 6px;">${escapeHtml(clean)}</span>`;
+  };
+
   const renderMathContent = (text) => {
     if (!text) return '';
 
-    // Function to render a single math chunk
-    const formatLatexChunk = (tex, isBlock) => {
-      const trimmed = tex.trim();
-      if (!trimmed) return '';
-      if (window.katex && typeof window.katex.renderToString === 'function') {
-        try {
-          return window.katex.renderToString(trimmed, {
-            displayMode: isBlock,
-            throwOnError: false,
-          });
-        } catch (e) {
-          // Fallback below
-        }
-      }
-      // Readable clean text fallback when KaTeX isn't loaded:
-      let clean = trimmed
-        .replace(/\\int\s*/g, '∫ ')
-        .replace(/\\frac\s*\{([^}]+)\}\s*\{([^}]+)\}/g, '($1 / $2)')
-        .replace(/\\neq\s*/g, ' ≠ ')
-        .replace(/\\leq\s*/g, ' ≤ ')
-        .replace(/\\geq\s*/g, ' ≥ ')
-        .replace(/\\times\s*/g, ' × ')
-        .replace(/\\cdot\s*/g, ' · ')
-        .replace(/\\pm\s*/g, ' ± ')
-        .replace(/\\infty\s*/g, '∞')
-        .replace(/\\sqrt\s*\{([^}]+)\}/g, '√($1)')
-        .replace(/\\\s*/g, ' ')
-        .replace(/\^\{([^}]+)\}/g, '^$1')
-        .replace(/_\{([^}]+)\}/g, '_$1');
-      return `<span style="font-family: 'DM Mono', monospace; font-weight: 600; color: #38bdf8; background: rgba(56, 189, 248, 0.12); padding: 2px 6px; border-radius: 6px;">${escapeHtml(clean)}</span>`;
-    };
-
     // 1. Block math: $$ ... $$ or \[ ... \]
     let processed = text.replace(/\$\$([\s\S]+?)\$\$/g, (_, math) => {
-      return `<div style="margin: 12px 0; text-align: center; overflow-x: auto;">${formatLatexChunk(math, true)}</div>`;
+      return `<div class="math-block-wrapper">${formatLatexChunk(math, true)}</div>`;
     });
     processed = processed.replace(/\\\[([\s\S]+?)\\\]/g, (_, math) => {
-      return `<div style="margin: 12px 0; text-align: center; overflow-x: auto;">${formatLatexChunk(math, true)}</div>`;
+      return `<div class="math-block-wrapper">${formatLatexChunk(math, true)}</div>`;
     });
 
     // 2. Inline math: $ ... $ or \( ... \) (carefully ignoring currency like $100 or 100$)
@@ -253,6 +402,17 @@
     text = text.replace(/(?:^|\n)(?:Here(?:'s| is) a thinking process:?|Thinking Process:?|1\. Analyze User Input:?)[\s\S]*?(?=(?:\n\n[A-Z]|\n\n\*\*|\n\n#|\n\n-|\n\n•|$))/gi, '').trim();
     if (!text) return '';
 
+    // 0. Currency & Rate separation: if multiple conversions are joined on the same line
+    // e.g. "**1 USD = 0.8924 EUR 1 USD = 96.87 INR**" -> "**1 USD = 0.8924 EUR**\n**1 USD = 96.87 INR**"
+    text = text.replace(/\*\*([^*]+?\b[A-Za-z]{3,4}\s*=.*?[A-Za-z]{3,4}\s*=.*?)\*\*/gi, (match, content) => {
+      const subEqs = content.split(/[ \t,;]+(?=\b\d+(?:\.\d+)?\s*[A-Za-z]{3,4}\s*=)/i);
+      if (subEqs.length > 1) {
+        return subEqs.filter(Boolean).map(p => `**${p.trim()}**`).join('\n');
+      }
+      return match;
+    });
+    text = text.replace(/(\b\d+(?:\.\d+)?\s*[A-Za-z]{3,4}\s*=[^=\n]+?\b[A-Za-z]{3,4}\b(?:\s*\([^)\n]*\))?)[ \t,;]+(?=\b\d+(?:\.\d+)?\s*[A-Za-z]{3,4}\s*=)/gi, '$1\n');
+
     // 1. Normalize code fences if LLM used '''lang or """lang
     let normalized = text.replace(/^([ \t]*)'{3}([a-zA-Z0-9_#+.-]*)/gm, '$1```$2');
     normalized = normalized.replace(/^([ \t]*)"{3}([a-zA-Z0-9_#+.-]*)/gm, '$1```$2');
@@ -269,7 +429,7 @@
       const widgetId = `widget_${Date.now()}_${nextWidgetId++}`;
       const cleanLang = (lang || '').toLowerCase().trim();
       codeWidgets.push({ id: widgetId, lang: cleanLang, code: code.trim(), raw: match });
-      return `%%CODEWIDGET_${widgetId}%%`;
+      return `\n\n%%CODEWIDGET_${widgetId}%%\n\n`;
     });
 
     // Strip citation tags: 【W1】, 【W2】, [W1], [S1], (W1), etc.
@@ -278,37 +438,41 @@
     processed = processed.replace(/\([WwSs]\d+\)/g, '');
     processed = processed.replace(/[ \t]{2,}/g, ' ');
 
-    // Handle markdown images: ![alt](url)
+    // Handle markdown images: ![alt](url) -> protect as IMAGEWIDGET
+    const imageWidgets = [];
     processed = processed.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (match, alt, src) => {
       const cleanSrc = src.trim();
       const cleanAlt = escapeHtml(alt.trim() || 'AI Generated Artwork');
-      return `
+      const widgetId = `img_${Date.now()}_${nextWidgetId++}`;
+      const html = `
         <div class="chat-image-card">
           <div class="chat-image-wrapper" onclick="window.open('${cleanSrc}', '_blank')">
             <img src="${cleanSrc}" alt="${cleanAlt}" class="chat-image-preview" loading="lazy" />
             <div class="chat-image-overlay">
-              <span class="chat-image-overlay-text">🔍 Click to expand full resolution</span>
+              <span class="chat-image-overlay-text">Click to expand full resolution</span>
             </div>
           </div>
           <div class="chat-image-footer">
             <div class="chat-image-badge">
-              <span>✨</span>
               <span>1024×1024 Flux.1</span>
             </div>
             <div class="chat-image-actions">
               <a href="${cleanSrc}" download="aster_artwork.jpg" target="_blank" class="chat-image-action-btn" onclick="event.stopPropagation()">
-                ⬇️ Download
+                Download
               </a>
               <a href="${cleanSrc}" target="_blank" class="chat-image-action-btn" onclick="event.stopPropagation()">
-                🔍 Open Full
+                Open Full
               </a>
             </div>
           </div>
         </div>
       `;
+      imageWidgets.push({ id: widgetId, html });
+      return `\n\n%%IMAGEWIDGET_${widgetId}%%\n\n`;
     });
 
-    // Format markdown tables into sleek data tables
+    // Format markdown tables into sleek data tables -> protect as TABLEWIDGET
+    const tableWidgets = [];
     processed = processed.replace(/(?:(?:^|\n)\|[^\n]+\|\r?\n\|[-: |]+\|\r?\n(?:\|[^\n]+\|\r?\n?)+)/g, (tableBlock) => {
       const rows = tableBlock.trim().split(/\r?\n/).filter((r) => r.trim().startsWith('|'));
       if (rows.length < 2) return tableBlock;
@@ -319,26 +483,43 @@
         const cells = r.split('|').slice(1, -1).map((c) => `<td>${c.trim()}</td>`).join('');
         return `<tr>${cells}</tr>`;
       }).join('');
-      return `<div class="deep-research-table-wrapper"><table class="deep-research-table"><thead><tr>${thHtml}</tr></thead><tbody>${trHtml}</tbody></table></div>`;
+      const widgetId = `tbl_${Date.now()}_${nextWidgetId++}`;
+      const html = `<div class="deep-research-table-wrapper"><table class="deep-research-table"><thead><tr>${thHtml}</tr></thead><tbody>${trHtml}</tbody></table></div>`;
+      tableWidgets.push({ id: widgetId, html });
+      return `\n\n%%TABLEWIDGET_${widgetId}%%\n\n`;
     });
 
-    // Extract and render math blocks/inlines safely
-    let mathHandled = renderMathContent(processed);
+    // Extract math blocks and inlines into safe placeholders to protect from markdown stripping
+    const mathWidgets = [];
+    const saveMathWidget = (tex, isBlock) => {
+      const widgetId = `math_${Math.random().toString(36).substr(2, 9)}`;
+      mathWidgets.push({ id: widgetId, tex, isBlock });
+      return `%%MATHWIDGET_${widgetId}%%`;
+    };
+
+    // 1. Block math: $$ ... $$ or \[ ... \]
+    let mathShielded = processed.replace(/\$\$([\s\S]+?)\$\$/g, (_, math) => `\n\n${saveMathWidget(math, true)}\n\n`);
+    mathShielded = mathShielded.replace(/\\\[([\s\S]+?)\\\]/g, (_, math) => `\n\n${saveMathWidget(math, true)}\n\n`);
+
+    // 2. Inline math: \( ... \) or $ ... $ (ignoring pure currency like $50 or $100)
+    mathShielded = mathShielded.replace(/\\\(([\s\S]+?)\\\)/g, (_, math) => saveMathWidget(math, false));
+    mathShielded = mathShielded.replace(/\$([^\n$]+?)\$/g, (match, math) => {
+      if (/^\s*\d+(\.\d+)?\s*$/.test(math)) {
+        return `$${escapeHtml(math)}`;
+      }
+      return saveMathWidget(math, false);
+    });
+
+    let mathHandled = mathShielded;
 
     // Format markdown headers cleanly without hashtags (#)
     // Only apply to lines that are NOT placeholder lines
     mathHandled = mathHandled.replace(/^(#{1,6})\s*(.+)$/gm, (m, hashes, title) => {
-      if (title.includes('%%CODEWIDGET')) return m; // skip placeholder lines
-      return `<h4 class="chat-subheading">${title}</h4>`;
+      if (title.includes('%%CODEWIDGET') || title.includes('%%MATHWIDGET') || title.includes('%%TABLEWIDGET') || title.includes('%%IMAGEWIDGET')) return m;
+      return `\n\n<h4 class="chat-subheading">${title.trim()}</h4>\n\n`;
     });
 
-    // Format bullet points cleanly without asterisks (*)
-    mathHandled = mathHandled.replace(/^[\s]*\*\s+(.+)$/gm, (m, content) => {
-      if (content.includes('%%CODEWIDGET')) return m;
-      return `• ${content}`;
-    });
-
-    // Format bold markdown (**text** or __text__) cleanly as bold and red important words
+    // Format bold markdown (**text** or __text__) cleanly as bold and important words
     mathHandled = mathHandled.replace(/\*\*\*([^*]+?)\*\*\*/g, '<strong class="agent-important-word"><em>$1</em></strong>');
     mathHandled = mathHandled.replace(/\*\*([^*]+?)\*\*/g, '<strong class="agent-important-word">$1</strong>');
     mathHandled = mathHandled.replace(/__([^_]+?)__/g, '<strong class="agent-important-word">$1</strong>');
@@ -354,20 +535,86 @@
     mathHandled = mathHandled.replace(/^[ \t]*\/+[ \t]*[-=~_]+.*?[-=~_]+[ \t]*\/+[ \t]*$/gm, '');
     mathHandled = mathHandled.replace(/(?<![a-zA-Z0-9_])\/[ \t]*[-=~_]{3,}[ \t]*\/(?![a-zA-Z0-9_])/g, '');
 
-    // Remove any remaining stray asterisks, hashtags, and citation brackets from the agent response outside code
-    // Only remove them on lines that don't contain placeholders
+    // Remove any remaining stray asterisks, hashtags, and citation brackets outside code and math
     mathHandled = mathHandled.split('\n').map(line => {
-      if (line.includes('%%CODEWIDGET')) return line;
+      if (line.includes('%%CODEWIDGET') || line.includes('%%MATHWIDGET') || line.includes('%%TABLEWIDGET') || line.includes('%%IMAGEWIDGET')) return line;
       return line.replace(/[*#]/g, '');
     }).join('\n');
     mathHandled = mathHandled.replace(/【[^】]*】/g, '').replace(/\[[WwSs]\d+\]/g, '').replace(/\([WwSs]\d+\)/g, '');
 
-    // Format emojis with tight, clean, evenly shaped borders following their natural shape
+    // Remove any pictographic emojis from chat text
     mathHandled = mathHandled.replace(/(<[^>]+>)|(\p{Extended_Pictographic}(?:\u200D\p{Extended_Pictographic}|\uFE0F|\uFE0E|[\uD83C\uDFFB-\uD83C\uDFFF])*)/gu, (match, tag, emoji) => {
       if (tag) return tag;
-      if (!emoji) return match;
-      return `<span class="chat-emoji">${emoji}</span>`;
+      return '';
     });
+
+    // 4. Structure into clean paragraphs, lists & line breaks
+    // Split into raw blocks by double newlines (\n\n+) so multi-paragraph stories, answers, and narratives breathe
+    const rawBlocks = mathHandled.split(/\n{2,}/).map(b => b.trim()).filter(Boolean);
+
+    const formattedBlocks = rawBlocks.map(block => {
+      // If block is a placeholder widget or already an HTML block element (table, heading, code, image)
+      if (/^%%(CODE|TABLE|IMAGE|MATH)WIDGET_/.test(block) || /^<h4\b/.test(block) || /^<div\b/.test(block)) {
+        return block;
+      }
+
+      const lines = block.split(/\n/).map(l => l.trim()).filter(Boolean);
+      const subBlocks = [];
+      let curType = null; // 'p', 'ul', 'ol'
+      let curItems = [];
+
+      const flush = () => {
+        if (!curItems.length) return;
+        if (curType === 'ul') {
+          subBlocks.push(`<ul class="chat-list">${curItems.map(i => `<li class="chat-li">${i}</li>`).join('')}</ul>`);
+        } else if (curType === 'ol') {
+          subBlocks.push(`<ol class="chat-list">${curItems.map(i => `<li class="chat-li">${i}</li>`).join('')}</ol>`);
+        } else if (curType === 'p') {
+          subBlocks.push(`<p class="assistant-p">${curItems.join('<br class="chat-break" />')}</p>`);
+        }
+        curItems = [];
+        curType = null;
+      };
+
+      for (const line of lines) {
+        if (/^[-*•+]\s+/.test(line)) {
+          if (curType !== 'ul') flush();
+          curType = 'ul';
+          curItems.push(line.replace(/^[-*•+]\s+/, '').trim());
+        } else if (/^\d+\.\s+/.test(line)) {
+          if (curType !== 'ol') flush();
+          curType = 'ol';
+          curItems.push(line.replace(/^\d+\.\s+/, '').trim());
+        } else {
+          if (curType !== 'p') flush();
+          curType = 'p';
+          curItems.push(line);
+        }
+      }
+      flush();
+
+      return subBlocks.join('\n');
+    });
+
+    let structuredHtml = formattedBlocks.join('\n');
+
+    // Restore and render all math widgets cleanly with KaTeX and responsive fallback
+    for (const mw of mathWidgets) {
+      const rendered = mw.isBlock
+        ? `<div class="math-block-wrapper">${formatLatexChunk(mw.tex, true)}</div>`
+        : formatLatexChunk(mw.tex, false);
+      structuredHtml = structuredHtml.replace(`%%MATHWIDGET_${mw.id}%%`, rendered);
+    }
+
+    // Restore and render all table widgets
+    for (const tw of tableWidgets) {
+      structuredHtml = structuredHtml.replace(`%%TABLEWIDGET_${tw.id}%%`, tw.html);
+    }
+
+    // Restore and render all image widgets
+    for (const iw of imageWidgets) {
+      structuredHtml = structuredHtml.replace(`%%IMAGEWIDGET_${iw.id}%%`, iw.html);
+    }
 
     // 3. Restore and render all code widgets (3D Models, Charts, Diagrams, Code Blocks)
     for (const w of codeWidgets) {
@@ -395,19 +642,19 @@
           <div class="interactive-3d-card" id="${w.id}" data-spec="${rawJson}">
             <div class="interactive-3d-header">
               <div class="interactive-3d-meta">
-                <span class="interactive-3d-badge">✦ 3D WebGL</span>
+                <span class="interactive-3d-badge">3D WebGL</span>
                 <span class="interactive-3d-title">${title}</span>
               </div>
               <div class="interactive-3d-controls">
-                <button type="button" class="ctrl-btn-3d btn-rotate" title="Toggle Auto-Rotation">🔄 Rotate</button>
-                <button type="button" class="ctrl-btn-3d btn-wireframe" title="Toggle Wireframe">🌐 Wireframe</button>
-                <button type="button" class="ctrl-btn-3d btn-reset" title="Reset View">↺ Reset</button>
-                <button type="button" class="ctrl-btn-3d btn-fullscreen" title="Toggle Fullscreen">⛶ Full</button>
+                <button type="button" class="ctrl-btn-3d btn-rotate" title="Toggle Auto-Rotation">Rotate</button>
+                <button type="button" class="ctrl-btn-3d btn-wireframe" title="Toggle Wireframe">Wireframe</button>
+                <button type="button" class="ctrl-btn-3d btn-reset" title="Reset View">Reset</button>
+                <button type="button" class="ctrl-btn-3d btn-fullscreen" title="Toggle Fullscreen">Full</button>
               </div>
             </div>
             <div class="interactive-3d-viewport">
               <canvas class="interactive-3d-canvas"></canvas>
-              <div class="interactive-3d-hint">🖱️ Left Drag: Orbit · Right Drag: Pan · Scroll: Zoom</div>
+              <div class="interactive-3d-hint">Left Drag: Orbit · Right Drag: Pan · Scroll: Zoom</div>
             </div>
             ${desc}
           </div>
@@ -426,10 +673,10 @@
           <div class="interactive-chart-card" id="${w.id}" data-spec="${rawJson}">
             <div class="interactive-chart-header">
               <div class="interactive-chart-meta">
-                <span class="interactive-chart-badge">📊 Chart</span>
+                <span class="interactive-chart-badge">Chart</span>
                 <span class="interactive-chart-title">${title}</span>
               </div>
-              <button type="button" class="chart-download-btn" title="Download Chart as PNG">⬇️ PNG</button>
+              <button type="button" class="chart-download-btn" title="Download Chart as PNG">PNG</button>
             </div>
             <div class="interactive-chart-body">
               <canvas class="interactive-chart-canvas"></canvas>
@@ -440,7 +687,7 @@
         widgetHtml = `
           <div class="interactive-mermaid-card" id="${w.id}">
             <div class="interactive-mermaid-header">
-              <span class="interactive-mermaid-badge">🔷 Architecture & Logic Diagram</span>
+              <span class="interactive-mermaid-badge">Architecture & Logic Diagram</span>
             </div>
             <div class="mermaid">${escapeHtml(w.code)}</div>
           </div>
@@ -462,6 +709,7 @@
         else if (rawLang === 'json') langDisplay = 'JSON';
         else if (rawLang === 'rust' || rawLang === 'rs') langDisplay = 'Rust';
         else if (rawLang === 'go' || rawLang === 'golang') langDisplay = 'Go';
+        else if (rawLang === 'blender' || rawLang === 'bpy') langDisplay = 'Blender Python (bpy)';
         else if (rawLang) langDisplay = rawLang.charAt(0).toUpperCase() + rawLang.slice(1);
 
         widgetHtml = `
@@ -479,7 +727,14 @@
                   </svg>
                   <span class="copy-btn-label">Copy code</span>
                 </button>
-                <button type="button" class="live-demo-btn" title="Live Demo">Live Demo</button>
+                <button type="button" class="download-code-btn" title="Download code file" data-lang="${escapeHtml(rawLang)}">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                    <polyline points="7 10 12 15 17 10"></polyline>
+                    <line x1="12" y1="15" x2="12" y2="3"></line>
+                  </svg>
+                  <span class="download-btn-label">Download</span>
+                </button>
               </div>
             </div>
             <div class="code-editor-viewport">
@@ -496,10 +751,10 @@
         `;
       }
 
-      mathHandled = mathHandled.replace(placeholder, () => widgetHtml);
+      structuredHtml = structuredHtml.replace(placeholder, () => widgetHtml);
     }
 
-    return mathHandled;
+    return structuredHtml;
   };
 
   // Duration formatting matching mockup: "Responded in 0.8 seconds"
@@ -580,6 +835,10 @@
       $('newChat').click();
       if (window.innerWidth <= 860) toggleSidebar(false);
     };
+    if ($('mobileUserAuthBtn')) $('mobileUserAuthBtn').onclick = () => {
+      $('userAuthBtn').click();
+      if (window.innerWidth <= 860) toggleSidebar(false);
+    };
     if ($('railNewChatBtn')) $('railNewChatBtn').onclick = () => {
       $('newChat').click();
       if (window.innerWidth <= 860) toggleSidebar(false);
@@ -588,83 +847,64 @@
   }
 
   let currentConversationId = localStorage.getItem('aster_active_conv_id') || '';
-  activeChatHistory = [];
+  let activeChatHistory = [];
 
   // Detailed Answer Mode (Astracore 3.1 toggle)
   let isDetailedMode = localStorage.getItem('astra_detailed_mode') === 'true';
 
-  // Engine Modes: 'general' (Quick/Extended) | 'code'
+  // Engine Modes: 'general' (Quick/Extended default mode) | 'code' (Explicit Code Mode)
   let activeEngineMode = 'general';
 
-  // Intelligent code-request detector for frontend guard (Quick/Extended mode)
-  function _isCodeRequest(text) {
-    const q = text.toLowerCase();
-    // Hard code/program request patterns
-    const codeVerbs = /\b(write|create|build|implement|generate|make|code|program|develop|script|design)\b/;
-    const codeLangs = /\b(python|javascript|typescript|java|c\+\+|cpp|c#|csharp|rust|go|golang|php|ruby|kotlin|swift|sql|bash|shell|html|css|react|node|django|flask|express|vue|angular)\b/;
-    const codeNouns = /\b(function|class|method|algorithm|snippet|program|script|code|api|endpoint|component|module|library|implementation|binary search|linked list|factorial|fibonacci|sort|recursion|loop|array|stack|queue|tree|graph)\b/;
-
-    // If they explicitly ask for code/program in ANY language
-    const hasCodeVerb = codeVerbs.test(q);
-    const hasCodeLang = codeLangs.test(q);
-    const hasCodeNoun = codeNouns.test(q);
-
-    // Strong signal: "write python code", "create a java class", "implement binary search"
-    if (hasCodeVerb && (hasCodeLang || hasCodeNoun)) return true;
-    // Strong signal: "python code", "c++ implementation"
-    if (hasCodeLang && hasCodeNoun) return true;
-    // Explicit code output requests
-    if (/\b(give me|show me|write)\s+(a\s+)?(code|program|script|implementation|function|class)\b/.test(q)) return true;
-    // Debug/refactor signals
-    if (/\b(debug|fix|refactor|explain this code|optimize this code)\b/.test(q)) return true;
-
-    return false;
-  }
-
-  function setEngineMode(mode) {
-    activeEngineMode = mode;
+  function setEngineMode(mode, notify = true) {
+    activeEngineMode = mode === 'code' ? 'code' : 'general';
     updateEngineModeUI();
-    const label = mode === 'code' ? '💻 Code Mode' : '✨ General Mode';
-    toast(`✓ ${label} Active`);
+    if (notify) {
+      if (activeEngineMode === 'code') {
+        toast('Code Mode Active: Programming assistance enabled.');
+      } else {
+        toast(isDetailedMode ? 'Extended Mode Active: Detailed and deep answers.' : 'Quick Mode Active: Concise and fast answers.');
+      }
+    }
   }
 
   function updateEngineModeUI() {
-    const codeCheck = $('popoverCodeCheck');
-    const codeRow = $('popoverModeCode');
-
-    if (codeCheck) codeCheck.classList.toggle('hidden', activeEngineMode !== 'code');
-    if (codeRow) codeRow.classList.toggle('active', activeEngineMode === 'code');
-
+    const isCode = activeEngineMode === 'code';
     const label = $('engineLabel');
     if (label) {
-      label.textContent = activeEngineMode === 'code' ? 'Astracore Code' : 'Astracore 4';
+      label.textContent = isCode ? 'Astracore 3.1 · Code' : 'Astracore 3.1';
     }
+
+    const quickCheck = $('popoverQuickCheck');
+    const extCheck = $('popoverExtendedCheck');
+    const codeCheck = $('popoverCodeCheck');
+    const quickRow = $('popoverModeQuick');
+    const extRow = $('popoverModeExtended');
+    const codeRow = $('popoverModeCode');
+
+    if (quickCheck) quickCheck.classList.toggle('hidden', isCode || isDetailedMode);
+    if (extCheck) extCheck.classList.toggle('hidden', isCode || !isDetailedMode);
+    if (codeCheck) codeCheck.classList.toggle('hidden', !isCode);
+
+    if (quickRow) quickRow.classList.toggle('active', !isCode && !isDetailedMode);
+    if (extRow) extRow.classList.toggle('active', !isCode && isDetailedMode);
+    if (codeRow) codeRow.classList.toggle('active', isCode);
   }
 
   function updateEngineLabelUI() {
     updateEngineModeUI();
   }
 
-  function setDetailedMode(detailed) {
+  function setDetailedMode(detailed, notify = false) {
     isDetailedMode = !!detailed;
     localStorage.setItem('astra_detailed_mode', isDetailedMode);
-    
-    // Update checkmarks in popover
-    const quickCheck = $('popoverQuickCheck');
-    const extCheck = $('popoverExtendedCheck');
-    const quickRow = $('popoverModeQuick');
-    const extRow = $('popoverModeExtended');
-
-    if (quickCheck) quickCheck.classList.toggle('hidden', isDetailedMode);
-    if (extCheck) extCheck.classList.toggle('hidden', !isDetailedMode);
-    if (quickRow) quickRow.classList.toggle('active', !isDetailedMode);
-    if (extRow) extRow.classList.toggle('active', isDetailedMode);
-
-    toast(isDetailedMode ? '⚡ Extended Mode Active: Detailed and deep answers.' : '✨ Quick Mode Active: Concise and fast answers.');
+    updateEngineModeUI();
+    if (notify && activeEngineMode !== 'code') {
+      toast(isDetailedMode ? 'Extended Mode Active: Detailed and deep answers.' : 'Quick Mode Active: Concise and fast answers.');
+    }
   }
 
   function toggleDetailedMode() {
-    setDetailedMode(!isDetailedMode);
+    setDetailedMode(!isDetailedMode, true);
   }
 
   // ─── Incognito / Temporary Chat Mode State Management ──────────────────────
@@ -705,7 +945,7 @@
         'pointer-events:none',
         'white-space:nowrap',
       ].join(';');
-      banner.textContent = '🕶️ Temporary mode activated';
+      banner.textContent = 'Temporary mode activated';
       // Attach inside #centerStage so it floats inside the chat area
       const stage = $('centerStage');
       if (stage) {
@@ -758,7 +998,7 @@
       // 5. Show banner
       banner.style.display = 'block';
 
-      toast('🕶️ Temporary Chat active — messages will not be saved.');
+      toast('Temporary Chat active — messages will not be saved.');
     } else {
       // ── DEACTIVATING TEMPORARY CHAT (RESTORE PUBLIC CHAT) ──────────────────
       // 1. Remove all temporary messages from DOM
@@ -806,20 +1046,36 @@
   }
 
   function updateAuthUI() {
-    const displayName = token ? ((user && user.username) || cachedUsername || (user && user.email ? user.email.split('@')[0] : '')) : '';
+    const loggedIn = Boolean(isAuthenticated || (user && user.role && user.role !== 'guest'));
+    const displayName = loggedIn ? ((user && user.username) || cachedUsername || (user && user.email ? user.email.split('@')[0] : '')) : '';
     if (displayName) {
       $('userAccountLabel').textContent = displayName.toUpperCase();
       if ($('userAuthBtn')) $('userAuthBtn').setAttribute('title', `Logged in as ${displayName} (Click for Account / Sign Out)`);
+      if ($('mobileUserAuthBtn')) {
+        $('mobileUserAuthBtn').setAttribute('title', `Logged in as ${displayName} (Click for Account / Sign Out)`);
+        $('mobileUserAuthBtn').classList.add('logged-in');
+      }
       if ($('loginForm')) $('loginForm').classList.add('hidden');
       if ($('signupForm')) $('signupForm').classList.add('hidden');
       $('authLogoutSection').classList.remove('hidden');
       $('loggedInUserEmail').textContent = `${displayName}${user && user.email ? ` (${user.email})` : ''}`;
+      if ($('authEyebrow')) $('authEyebrow').textContent = 'SECURE ACCESS';
+      if ($('authHeading')) $('authHeading').textContent = 'Account Info';
+      if ($('authSubtitle')) $('authSubtitle').textContent = `Signed in as ${displayName}`;
     } else {
       $('userAccountLabel').textContent = 'LOGIN';
       if ($('userAuthBtn')) $('userAuthBtn').setAttribute('title', 'Sign In / Register');
+      if ($('mobileUserAuthBtn')) {
+        $('mobileUserAuthBtn').setAttribute('title', 'Sign In / Register');
+        $('mobileUserAuthBtn').classList.remove('logged-in');
+      }
       $('authLogoutSection').classList.add('hidden');
+      if ($('authEyebrow')) $('authEyebrow').textContent = 'SECURE WORKSPACE';
+      if ($('authHeading')) $('authHeading').textContent = 'Welcome to Astra';
+      if ($('authSubtitle')) $('authSubtitle').textContent = 'Sign in to sync your conversations across devices, or continue as guest.';
       switchAuthMode(authMode);
     }
+    if ($('closeAuthModal')) $('closeAuthModal').classList.remove('hidden');
   }
 
   async function checkHealth() {
@@ -980,14 +1236,16 @@
   function initInteractiveWidgets(scope) {
     if (!scope) return;
 
-    // 1. Copy Code Block Buttons
+    // 1. Copy Code Block Buttons (Pure raw code, no fences/markdown artifacts)
     scope.querySelectorAll('.copy-code-btn').forEach((btn) => {
       btn.onclick = async (e) => {
         e.preventDefault();
         e.stopPropagation();
         const card = btn.closest('.code-editor-card, .code-block-card');
         const codeElem = card ? card.querySelector('.code-editor-code, code, pre') : null;
-        const textToCopy = codeElem ? (codeElem.innerText || codeElem.textContent || '') : '';
+        let textToCopy = codeElem ? (codeElem.innerText || codeElem.textContent || '') : '';
+        // Pure code: strip surrounding markdown code fences or trailing artifacts
+        textToCopy = textToCopy.replace(/^```[a-zA-Z0-9_-]*\n?/, '').replace(/\n?```$/, '');
         if (!textToCopy) return;
 
         const label = btn.querySelector('.copy-btn-label') || btn;
@@ -996,7 +1254,7 @@
         const setCopied = () => {
           btn.classList.add('copied');
           label.textContent = 'Copied!';
-          toast('✓ Code copied to clipboard');
+          toast('Code copied to clipboard');
           setTimeout(() => {
             btn.classList.remove('copied');
             label.textContent = origText;
@@ -1027,6 +1285,62 @@
       };
     });
 
+    // 1a. Download Code File Buttons
+    scope.querySelectorAll('.download-code-btn').forEach((btn) => {
+      btn.onclick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const card = btn.closest('.code-editor-card, .code-block-card');
+        const codeElem = card ? card.querySelector('.code-editor-code, code, pre') : null;
+        let codeText = codeElem ? (codeElem.innerText || codeElem.textContent || '') : '';
+        codeText = codeText.replace(/^```[a-zA-Z0-9_-]*\n?/, '').replace(/\n?```$/, '');
+        if (!codeText) return;
+
+        const rawLang = (btn.dataset.lang || (card && card.dataset.language) || '').toLowerCase();
+        const langMap = {
+          html: 'index.html',
+          htm: 'index.html',
+          css: 'style.css',
+          javascript: 'script.js',
+          js: 'script.js',
+          typescript: 'app.ts',
+          ts: 'app.ts',
+          jsx: 'App.jsx',
+          tsx: 'App.tsx',
+          python: 'main.py',
+          py: 'main.py',
+          json: 'data.json',
+          sql: 'query.sql',
+          bash: 'script.sh',
+          sh: 'script.sh',
+          c: 'main.c',
+          cpp: 'main.cpp',
+          'c++': 'main.cpp',
+          java: 'Main.java',
+          rust: 'main.rs',
+          rs: 'main.rs',
+          go: 'main.go',
+          markdown: 'README.md',
+          md: 'README.md',
+          xml: 'data.xml',
+          yaml: 'config.yaml',
+          yml: 'config.yaml',
+        };
+
+        const filename = langMap[rawLang] || (rawLang ? `code.${rawLang}` : 'snippet.txt');
+        const blob = new Blob([codeText], { type: 'text/plain;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        toast(`Downloaded ${filename}`);
+      };
+    });
+
     // 1b. Syntax Highlighting via highlight.js
     if (window.hljs) {
       scope.querySelectorAll('.code-editor-card pre code').forEach((codeBlock) => {
@@ -1038,54 +1352,6 @@
         } catch (_) {}
       });
     }
-
-    // 1c. Live Demo Button Handler
-    scope.querySelectorAll('.live-demo-btn').forEach((btn) => {
-      btn.onclick = async (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        // Find the parent message container to collect all code blocks
-        const card = btn.closest('.code-editor-card');
-        if (!card) return;
-        const messageEl = card.closest('.message-bubble') || card.closest('[class*="message"]') || card.parentElement;
-        // Collect HTML / CSS / JS from all code cards in same message
-        const allCards = messageEl ? messageEl.querySelectorAll('.code-editor-card') : [card];
-        let html = '', css = '', js = '';
-        allCards.forEach((c) => {
-          const lang = (c.dataset.language || '').toLowerCase();
-          const codeEl = c.querySelector('.code-editor-code');
-          const code = codeEl ? (codeEl.innerText || codeEl.textContent) : '';
-          if (lang === 'html') html = code;
-          else if (lang === 'css') css = code;
-          else if (lang === 'javascript' || lang === 'js') js = code;
-        });
-        // If the only block is HTML, use it directly
-        if (!html && !css && !js) {
-          const codeEl = card.querySelector('.code-editor-code');
-          html = codeEl ? (codeEl.innerText || codeEl.textContent) : '';
-        }
-        const origText = btn.textContent;
-        btn.textContent = 'Launching…';
-        btn.disabled = true;
-        try {
-          const resp = await fetch('/api/preview', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ html, css, js })
-          });
-          const data = await resp.json();
-          if (data && data.url) {
-            window.open(data.url, '_blank');
-          }
-        } catch (err) {
-          console.warn('Live demo error:', err);
-          toast('Could not open Live Demo: ' + err.message, true);
-        } finally {
-          btn.textContent = origText;
-          btn.disabled = false;
-        }
-      };
-    });
 
     // 1d. Close Run Drawer Button
     scope.querySelectorAll('.close-run-btn').forEach((btn) => {
@@ -1397,38 +1663,362 @@
           scene.add(molGroup);
 
         } else if (type.includes('solar') || type.includes('planet')) {
-          const solarGroup = new THREE.Group();
-          const sun = new THREE.Mesh(new THREE.SphereGeometry(2.8, 32, 32), new THREE.MeshBasicMaterial({ color: 0xfbbf24 }));
-          solarGroup.add(sun);
-          solarGroup.add(new THREE.PointLight(0xffedd5, 2.5, 80));
+          camera.position.set(0, 32, 58);
+          if (controls) {
+            controls.target.set(0, 0, 0);
+            controls.maxDistance = 250;
+            controls.autoRotate = false;
+          }
 
-          const planetData = [
-            { r: 5.5, size: 0.5, color: 0x94a3b8, speed: 0.04 },
-            { r: 8.0, size: 0.7, color: 0xf59e0b, speed: 0.025 },
-            { r: 11.5, size: 0.85, color: 0x38bdf8, speed: 0.018 },
-            { r: 15.0, size: 0.65, color: 0xef4444, speed: 0.014 },
-            { r: 20.0, size: 1.6, color: 0xd97706, speed: 0.008 },
+          const solarGroup = new THREE.Group();
+
+          // 1. Sun & Corona Glow
+          const sunGeom = new THREE.SphereGeometry(3.2, 32, 32);
+          const sunMat = new THREE.MeshBasicMaterial({ color: 0xffb703 });
+          const sun = new THREE.Mesh(sunGeom, sunMat);
+          solarGroup.add(sun);
+
+          // Corona outer soft glow
+          const coronaGeom = new THREE.SphereGeometry(3.6, 32, 32);
+          const coronaMat = new THREE.MeshBasicMaterial({ color: 0xfd8500, transparent: true, opacity: 0.28, side: THREE.BackSide });
+          solarGroup.add(new THREE.Mesh(coronaGeom, coronaMat));
+
+          const sunLight = new THREE.PointLight(0xfffaed, 3.0, 180, 0.5);
+          solarGroup.add(sunLight);
+
+          // Scientific Data for All 8 Planets
+          const planetDefs = [
+            {
+              name: 'Mercury',
+              r: 6.2,
+              size: 0.38,
+              color: 0xa1a1aa,
+              keplerSpeed: 0.045,
+              rotSpeed: 0.01,
+              dist: '57.9M km (0.39 AU)',
+              period: '88 Earth Days',
+              diameter: '4,879 km',
+              facts: 'Smallest planet with extreme temperature swings from -180°C to 430°C.',
+            },
+            {
+              name: 'Venus',
+              r: 9.0,
+              size: 0.68,
+              color: 0xfde047,
+              keplerSpeed: 0.032,
+              rotSpeed: -0.004,
+              dist: '108.2M km (0.72 AU)',
+              period: '225 Earth Days',
+              diameter: '12,104 km',
+              facts: 'Hottest planet in the solar system (465°C) with a toxic, crushing CO2 atmosphere.',
+            },
+            {
+              name: 'Earth',
+              r: 12.8,
+              size: 0.74,
+              color: 0x38bdf8,
+              keplerSpeed: 0.024,
+              rotSpeed: 0.02,
+              hasMoon: true,
+              dist: '149.6M km (1.0 AU)',
+              period: '365.25 Days',
+              diameter: '12,742 km',
+              facts: 'Our home planet; only known world with liquid water oceans and thriving life.',
+            },
+            {
+              name: 'Mars',
+              r: 16.5,
+              size: 0.52,
+              color: 0xef4444,
+              keplerSpeed: 0.018,
+              rotSpeed: 0.019,
+              dist: '227.9M km (1.52 AU)',
+              period: '687 Earth Days',
+              diameter: '6,779 km',
+              facts: 'The Red Planet; home to Olympus Mons, a volcano three times taller than Mt. Everest.',
+            },
+            {
+              name: 'Jupiter',
+              r: 22.0,
+              size: 1.85,
+              color: 0xf59e0b,
+              keplerSpeed: 0.011,
+              rotSpeed: 0.04,
+              dist: '778.5M km (5.2 AU)',
+              period: '11.86 Earth Years',
+              diameter: '139,820 km',
+              facts: 'Largest planet; holds more than double the mass of all other planets combined.',
+            },
+            {
+              name: 'Saturn',
+              r: 29.5,
+              size: 1.55,
+              color: 0xfcd34d,
+              keplerSpeed: 0.008,
+              rotSpeed: 0.038,
+              hasRings: true,
+              dist: '1.43B km (9.5 AU)',
+              period: '29.45 Earth Years',
+              diameter: '116,460 km',
+              facts: 'Famed for its dazzling rings made of billions of chunks of ice, rock, and dust.',
+            },
+            {
+              name: 'Uranus',
+              r: 36.5,
+              size: 1.10,
+              color: 0x67e8f9,
+              keplerSpeed: 0.0055,
+              rotSpeed: 0.024,
+              dist: '2.87B km (19.2 AU)',
+              period: '84.0 Earth Years',
+              diameter: '50,724 km',
+              facts: 'An icy giant world that rotates on its side with a 98-degree axial tilt.',
+            },
+            {
+              name: 'Neptune',
+              r: 43.5,
+              size: 1.05,
+              color: 0x3b82f6,
+              keplerSpeed: 0.004,
+              rotSpeed: 0.022,
+              dist: '4.50B km (30.1 AU)',
+              period: '164.8 Earth Years',
+              diameter: '49,244 km',
+              facts: 'The most distant planet, swept by supersonic winds over 2,000 km/h.',
+            },
           ];
 
           const planetMeshes = [];
-          planetData.forEach((p) => {
-            const ringGeom = new THREE.RingGeometry(p.r - 0.06, p.r + 0.06, 64);
-            const orbitLine = new THREE.Mesh(ringGeom, new THREE.MeshBasicMaterial({ color: 0x334155, side: THREE.DoubleSide }));
+          let timeSpeed = 1.0;
+          let focusedBody = null;
+
+          // Build Orbit Rings & Planet Meshes
+          planetDefs.forEach((p) => {
+            // Orbital Path Ring
+            const ringGeom = new THREE.RingGeometry(p.r - 0.08, p.r + 0.08, 96);
+            const orbitMat = new THREE.MeshBasicMaterial({ color: 0x334155, side: THREE.DoubleSide, transparent: true, opacity: 0.45 });
+            const orbitLine = new THREE.Mesh(ringGeom, orbitMat);
             orbitLine.rotation.x = Math.PI / 2;
             solarGroup.add(orbitLine);
 
-            const pMesh = new THREE.Mesh(new THREE.SphereGeometry(p.size, 20, 20), new THREE.MeshStandardMaterial({ color: p.color, roughness: 0.4 }));
+            // Planet Body
+            const pGeom = new THREE.SphereGeometry(p.size, 24, 24);
+            const pMat = new THREE.MeshStandardMaterial({
+              color: p.color,
+              roughness: 0.5,
+              metalness: 0.1,
+            });
+            const pMesh = new THREE.Mesh(pGeom, pMat);
+            pMesh.castShadow = true;
+            pMesh.receiveShadow = true;
+            pMesh.userData = { planet: p };
             solarGroup.add(pMesh);
-            planetMeshes.push({ mesh: pMesh, r: p.r, speed: p.speed, angle: Math.random() * Math.PI * 2 });
+
+            let moonMesh = null;
+            let moonAngle = 0;
+            if (p.hasMoon) {
+              const mGeom = new THREE.SphereGeometry(0.18, 16, 16);
+              const mMat = new THREE.MeshStandardMaterial({ color: 0xe2e8f0, roughness: 0.7 });
+              moonMesh = new THREE.Mesh(mGeom, mMat);
+              solarGroup.add(moonMesh);
+            }
+
+            let saturnRings = null;
+            if (p.hasRings) {
+              const rGeom = new THREE.RingGeometry(p.size * 1.35, p.size * 2.3, 64);
+              const rMat = new THREE.MeshStandardMaterial({
+                color: 0xead59e,
+                side: THREE.DoubleSide,
+                transparent: true,
+                opacity: 0.85,
+                roughness: 0.6,
+              });
+              saturnRings = new THREE.Mesh(rGeom, rMat);
+              saturnRings.rotation.x = Math.PI / 2 + 0.45;
+              solarGroup.add(saturnRings);
+            }
+
+            planetMeshes.push({
+              mesh: pMesh,
+              def: p,
+              r: p.r,
+              speed: p.keplerSpeed,
+              rotSpeed: p.rotSpeed,
+              angle: Math.random() * Math.PI * 2,
+              moonMesh,
+              moonAngle,
+              saturnRings,
+            });
           });
 
-          customUpdate = () => {
-            planetMeshes.forEach((item) => {
-              item.angle += item.speed;
-              item.mesh.position.set(Math.cos(item.angle) * item.r, 0, Math.sin(item.angle) * item.r);
-            });
-          };
           scene.add(solarGroup);
+
+          // Build Interactive HUD Elements inside viewport
+          if (viewport) {
+            viewport.style.position = 'relative';
+
+            // 1. Planet Selection Bar (Top)
+            const topBar = document.createElement('div');
+            topBar.className = 'solar-planets-bar';
+
+            const sunChip = document.createElement('button');
+            sunChip.type = 'button';
+            sunChip.className = 'solar-planet-chip active';
+            sunChip.innerHTML = 'Sun';
+            topBar.appendChild(sunChip);
+
+            const chips = [sunChip];
+
+            planetDefs.forEach((p, idx) => {
+              const chip = document.createElement('button');
+              chip.type = 'button';
+              chip.className = 'solar-planet-chip';
+              chip.textContent = p.name;
+              chip.onclick = (e) => {
+                e.stopPropagation();
+                chips.forEach(c => c.classList.remove('active'));
+                chip.classList.add('active');
+                focusOnPlanet(planetMeshes[idx]);
+              };
+              topBar.appendChild(chip);
+              chips.push(chip);
+            });
+
+            sunChip.onclick = (e) => {
+              e.stopPropagation();
+              chips.forEach(c => c.classList.remove('active'));
+              sunChip.classList.add('active');
+              focusOnSun();
+            };
+
+            viewport.appendChild(topBar);
+
+            // 2. Scientific Fact HUD Card (Bottom Left)
+            const hudCard = document.createElement('div');
+            hudCard.className = 'solar-hud-card';
+            viewport.appendChild(hudCard);
+
+            const updateHud = (title, dist, period, dia, facts) => {
+              hudCard.innerHTML = `
+                <div class="solar-hud-title">
+                  <span>${escapeHtml(title)}</span>
+                  <span style="font-size: 0.72rem; color: #94a3b8; font-weight: 500;">Planetary Data</span>
+                </div>
+                <div class="solar-hud-stat"><span>Distance from Sun:</span><strong>${escapeHtml(dist)}</strong></div>
+                <div class="solar-hud-stat"><span>Orbital Period:</span><strong>${escapeHtml(period)}</strong></div>
+                <div class="solar-hud-stat"><span>Diameter:</span><strong>${escapeHtml(dia)}</strong></div>
+                <div class="solar-hud-desc">${escapeHtml(facts)}</div>
+              `;
+            };
+
+            // Default HUD state: Sun & Solar System overview
+            updateHud(
+              'The Solar System',
+              '0 km (Center)',
+              '~230M Years (Milky Way)',
+              '1,392,700 km',
+              'Gravitationally bound system of 8 planets, over 200 moons, and billions of asteroids and comets.'
+            );
+
+            // 3. Speed Controls (Bottom Right)
+            const speedBar = document.createElement('div');
+            speedBar.className = 'solar-speed-controls';
+            const speeds = [
+              { label: '1x', val: 1.0 },
+              { label: '5x', val: 5.0 },
+              { label: '20x', val: 20.0 },
+              { label: 'Pause', val: 0.0 },
+            ];
+            speeds.forEach((s, sIdx) => {
+              const sBtn = document.createElement('button');
+              sBtn.type = 'button';
+              sBtn.className = 'solar-speed-btn' + (sIdx === 0 ? ' active' : '');
+              sBtn.textContent = s.label;
+              sBtn.onclick = (e) => {
+                e.stopPropagation();
+                speedBar.querySelectorAll('.solar-speed-btn').forEach(b => b.classList.remove('active'));
+                sBtn.classList.add('active');
+                timeSpeed = s.val;
+              };
+              speedBar.appendChild(sBtn);
+            });
+            viewport.appendChild(speedBar);
+
+            function focusOnPlanet(item) {
+              focusedBody = item;
+              updateHud(item.def.name, item.def.dist, item.def.period, item.def.diameter, item.def.facts);
+            }
+
+            function focusOnSun() {
+              focusedBody = null;
+              if (controls) {
+                controls.target.set(0, 0, 0);
+              }
+              camera.position.set(0, 32, 58);
+              updateHud(
+                'The Solar System',
+                '0 km (Center)',
+                '~230M Years (Milky Way)',
+                '1,392,700 km',
+                'Gravitationally bound system of 8 planets, over 200 moons, and billions of asteroids and comets.'
+              );
+            }
+
+            // Raycaster for clicking directly on 3D planets
+            const raycaster = new THREE.Raycaster();
+            const mouse = new THREE.Vector2();
+            canvas.addEventListener('click', (e) => {
+              const rect = canvas.getBoundingClientRect();
+              mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+              mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+              raycaster.setFromCamera(mouse, camera);
+              const intersects = raycaster.intersectObjects(planetMeshes.map(m => m.mesh));
+              if (intersects.length > 0) {
+                const hit = intersects[0].object;
+                const found = planetMeshes.find(m => m.mesh === hit);
+                if (found) {
+                  const idx = planetMeshes.indexOf(found);
+                  chips.forEach(c => c.classList.remove('active'));
+                  if (chips[idx + 1]) chips[idx + 1].classList.add('active');
+                  focusOnPlanet(found);
+                }
+              }
+            });
+          }
+
+          // Keplerian Physics & Animation Loop
+          customUpdate = () => {
+            sun.rotation.y += 0.002;
+            planetMeshes.forEach((item) => {
+              if (timeSpeed > 0) {
+                item.angle += item.speed * timeSpeed;
+                item.mesh.rotation.y += item.rotSpeed * timeSpeed;
+              }
+              const px = Math.cos(item.angle) * item.r;
+              const pz = Math.sin(item.angle) * item.r;
+              item.mesh.position.set(px, 0, pz);
+
+              // Moon orbit around Earth
+              if (item.moonMesh) {
+                if (timeSpeed > 0) item.moonAngle += 0.08 * timeSpeed;
+                item.moonMesh.position.set(
+                  px + Math.cos(item.moonAngle) * 1.5,
+                  Math.sin(item.moonAngle) * 0.35,
+                  pz + Math.sin(item.moonAngle) * 1.5
+                );
+              }
+
+              // Saturn Rings position tracking
+              if (item.saturnRings) {
+                item.saturnRings.position.set(px, 0, pz);
+              }
+            });
+
+            // Smoothly track focused planet
+            if (focusedBody && controls) {
+              controls.target.lerp(focusedBody.mesh.position, 0.08);
+            }
+          };
 
         } else if (type.includes('atom') || type.includes('orbital')) {
           const atomGroup = new THREE.Group();
@@ -1628,7 +2218,7 @@
         if (btnFull) {
           btnFull.onclick = () => {
             const isFull = card.classList.toggle('fullscreen-3d');
-            btnFull.textContent = isFull ? '✕ Exit' : '⛶ Full';
+            btnFull.textContent = isFull ? 'Exit' : 'Full';
             setTimeout(handleResize, 100);
           };
         }
@@ -1658,8 +2248,21 @@
   }
 
   // Add message: Formats user message as lavender bubble and assistant message with A* avatar & Cormorant font
-  function addMessage(role, text, meta = '', sources = [], stayAtTop = false, isChemistry = false, researchTrace = null, isTemporary = false) {
-    if ($('welcome')) $('welcome').classList.add('hidden');
+  function addMessage(role, text, meta = '', sources = [], stayAtTop = false, isChemistry = false, researchTrace = null, isTemporary = false, imageUrl = null) {
+    const welcome = $('welcome');
+    if (welcome) {
+      welcome.classList.add('hidden');
+      welcome.style.display = 'none';
+    }
+    const stage = $('centerStage') || document.querySelector('.astra-center-stage');
+    if (stage) {
+      stage.classList.remove('welcome-mode');
+      stage.classList.add('chat-active');
+    }
+    const container = $('messages');
+    if (container) {
+      container.style.display = 'flex';
+    }
     updateStageMode();
     const row = document.createElement('article');
     const isTempMsg = isTemporary || (role === 'user' && isIncognito);
@@ -1670,7 +2273,15 @@
     }
 
     if (role === 'user') {
-      row.innerHTML = `<div class="user-bubble">${escapeHtml(text)}</div>`;
+      let imgHtml = '';
+      if (imageUrl) {
+        imgHtml = `
+          <div class="user-msg-image-wrapper">
+            <img src="${escapeHtml(imageUrl)}" alt="User attached photograph" class="user-msg-image" onclick="window.open(this.src, '_blank')" />
+          </div>`;
+      }
+      const textHtml = text ? `<div>${escapeHtml(text)}</div>` : '';
+      row.innerHTML = `<div class="user-bubble">${imgHtml}${textHtml}</div>`;
     } else {
       const formattedText = formatMessageText(text);
       const latencyHtml = meta ? `<span class="meta-responded">Responded in ${escapeHtml(meta)}</span>` : '';
@@ -1678,7 +2289,25 @@
 
       const sourcesHtml = (sources && sources.length) ? `
         <div class="message-sources" style="margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px;">
-          ${sources.map((s) => `<span class="source-chip" style="font-size: 11px; background: rgba(0,0,0,0.06); padding: 3px 8px; border-radius: 8px;">📄 ${escapeHtml(s.title || s.label || s.name || 'Source')}</span>`).join('')}
+          ${sources.map((s) => {
+            const rawTitle = (s.title || s.label || s.name || 'Source').trim();
+            const site = (s.site || '').trim();
+            const date = (s.date || '').trim();
+            const url = (s.url || '').trim();
+
+            let displayText = escapeHtml(rawTitle);
+            if (site && !rawTitle.toLowerCase().includes(site.toLowerCase())) {
+              displayText = `<strong style="font-weight:600;">${escapeHtml(site)}</strong> <span style="opacity:0.6;margin:0 2px;">•</span> ${escapeHtml(rawTitle)}`;
+            }
+            if (date) {
+              displayText += ` <span class="source-date" style="opacity:0.75; font-size:11px; margin-left:4px;">(${escapeHtml(date)})</span>`;
+            }
+
+            if (url && /^https?:\/\//i.test(url)) {
+              return `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" class="source-chip source-link" title="${escapeHtml(rawTitle)}">${displayText}</a>`;
+            }
+            return `<span class="source-chip">${displayText}</span>`;
+          }).join('')}
         </div>
       ` : '';
 
@@ -1722,22 +2351,21 @@
       }
     }
 
-    const container = $('messages');
-    container.append(row);
+    if (container) container.append(row);
 
     // Initialize 3D models, charts, and diagrams within this message
     initInteractiveWidgets(row);
 
-    // Update outside-the-box code layout matching ChatGPT aesthetic
-    const stage = $('centerStage');
+    // Keep standard centered layout
     if (stage) {
-      const hasCode = Boolean(stage.querySelector('.code-editor-card') || row.querySelector('.code-editor-card') || activeEngineMode === 'code');
-      stage.classList.toggle('has-code-view', hasCode);
+      stage.classList.remove('has-code-view');
     }
 
     if (stayAtTop) {
-      requestAnimationFrame(() => {
+      const raf = (typeof window !== 'undefined' && window.requestAnimationFrame) ? window.requestAnimationFrame : ((cb) => setTimeout(cb, 16));
+      raf(() => {
         setTimeout(() => {
+          if (!container) return;
           const topPos = row.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop;
           container.scrollTo({
             top: Math.max(0, topPos - 12),
@@ -1746,14 +2374,14 @@
         }, 20);
       });
     } else {
-      container.scrollTop = container.scrollHeight;
+      if (container) container.scrollTop = container.scrollHeight;
     }
     return row;
   }
   window.addMessage = addMessage;
 
   // Conversations Management
-  async function refreshConversations() {
+  async function refreshConversations(autoRestore = false) {
     try {
       const data = await api('/api/conversations');
       const list = $('conversationList');
@@ -1761,7 +2389,18 @@
 
       if (!data.conversations || !data.conversations.length) {
         list.innerHTML = '<p class="muted-box-msg">No conversations yet</p>';
+        currentConversationId = '';
+        localStorage.removeItem('aster_active_conv_id');
         return;
+      }
+
+      // Purge stale saved conversation ID if it no longer exists on server
+      const savedId = localStorage.getItem('aster_active_conv_id');
+      if (savedId && !data.conversations.some((c) => c.id === savedId)) {
+        localStorage.removeItem('aster_active_conv_id');
+        if (currentConversationId === savedId) {
+          currentConversationId = '';
+        }
       }
 
       list.innerHTML = data.conversations
@@ -1772,6 +2411,19 @@
           </div>
         `)
         .join('');
+
+      // Auto-restore active or most recent conversation into chat view on page load / refresh
+      if (autoRestore && data.conversations && data.conversations.length > 0) {
+        const stream = $('messages');
+        const isStreamEmpty = !stream || stream.children.length === 0;
+        if (isStreamEmpty) {
+          const currentSaved = localStorage.getItem('aster_active_conv_id');
+          const target = data.conversations.find((c) => c.id === currentSaved) || data.conversations[0];
+          if (target && target.id) {
+            loadConversation(target.id);
+          }
+        }
+      }
 
       // Wire conversation item click
       list.querySelectorAll('.conv-item').forEach((item) => {
@@ -1831,7 +2483,7 @@
           .map((m) => ({ role: m.role, content: m.text }));
         for (const m of conv.messages) {
           const isChem = false;
-          addMessage(m.role, m.text, m.latency || '', m.sources || [], false, isChem, m.research_trace, m.temporary);
+          addMessage(m.role, m.text, m.latency || '', m.sources || [], false, isChem, m.research_trace, m.temporary, m.image_url);
         }
       } else {
         activeChatHistory = [];
@@ -1841,16 +2493,22 @@
 
       const stage = $('centerStage');
       if (stage) {
-        const hasCode = Boolean(stage.querySelector('.code-editor-card') || activeEngineMode === 'code');
-        stage.classList.toggle('has-code-view', hasCode);
+        stage.classList.remove('has-code-view');
       }
     } catch (err) {
+      if (currentConversationId === convId) {
+        currentConversationId = '';
+        localStorage.removeItem('aster_active_conv_id');
+      }
       toast(`Could not load conversation: ${err.message}`, true);
     }
   }
 
+  let isSending = false;
+
   async function sendMessage(event) {
     if (event) event.preventDefault();
+    if (isSending) return;
     stopVoiceRecognition();
 
     // Automatically close sidebar smoothly when user sends query
@@ -1860,23 +2518,51 @@
     }
 
     const box = $('message');
-    const message = box.value.trim();
-    if (!message) return;
+    let message = box ? box.value.trim() : '';
+    const curAttached = attachedImage;
 
-    // ── Frontend Code Mode Guard ──────────────────────────────────────────────
-    // If NOT in code mode and the user is asking for code/programming, block it.
-    if (activeEngineMode !== 'code' && _isCodeRequest(message)) {
-      box.value = '';
-      box.style.height = 'auto';
-      addMessage('user', message, '', [], false, false, null, isIncognito);
-      addMessage('assistant', 'Code can only be genearte in code mode', '', [], false, false, null, isIncognito);
+    if (!message && curAttached) {
+      message = 'Analyze this image and explain what is shown or solve any questions in it.';
+    }
+    if (!message && !curAttached) return;
+
+    if (tokenStatus && (tokenStatus.out_of_tokens || tokenStatus.tokens_remaining <= 0)) {
+      updateTokenDisplay(tokenStatus);
+      toast('Out of tokens. You have reached your daily limit.', true);
       return;
     }
 
-    box.value = '';
-    box.style.height = 'auto';
+    if (curAttached) {
+      clearComposerAttachedImage();
+    }
 
-    addMessage('user', message, '', [], false, false, null, isIncognito);
+    isSending = true;
+    const sendBtn = $('sendButton');
+    const homeSendBtn = $('composerHomeSendBtn');
+    if (sendBtn) sendBtn.disabled = true;
+    if (homeSendBtn) homeSendBtn.disabled = true;
+
+    if (box) {
+      box.value = '';
+      box.style.height = 'auto';
+    }
+
+    const welcome = $('welcome');
+    if (welcome) {
+      welcome.classList.add('hidden');
+      welcome.style.display = 'none';
+    }
+    const stage = $('centerStage') || document.querySelector('.astra-center-stage');
+    if (stage) {
+      stage.classList.remove('welcome-mode');
+      stage.classList.add('chat-active');
+    }
+    const msgStream = $('messages');
+    if (msgStream) {
+      msgStream.style.display = 'flex';
+    }
+
+    addMessage('user', message, '', [], false, false, null, isIncognito, curAttached ? (curAttached.url || curAttached.base64) : null);
 
     const pending = addMessage('assistant', 'Astra is thinking…', '', [], false, false, null, isIncognito);
     const bubble = pending.querySelector('.assistant-content') || pending;
@@ -1896,19 +2582,48 @@
         ? (savedNormalConvId || currentConversationId || null)
         : (currentConversationId || null);
 
-      const data = await api('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message,
-          selected_doc_id: $('documentSelect').value || null,
-          conversation_id: convIdToSend,
-          history: historyToSend,
-          incognito: isIncognito,
-          detailed: isDetailedMode,
-          mode: activeEngineMode,
-        }),
-      });
+      let data;
+      try {
+        data = await api('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            message,
+            selected_doc_id: ($('documentSelect') && $('documentSelect').value) || null,
+            conversation_id: convIdToSend,
+            history: historyToSend,
+            incognito: isIncognito,
+            detailed: isDetailedMode,
+            mode: activeEngineMode,
+            image_data: curAttached ? curAttached.base64 : null,
+            image_url: curAttached ? curAttached.url : null,
+          }),
+        });
+      } catch (chatApiErr) {
+        // If error is 404 / Conversation not found and we sent a conversation_id, auto-recover seamlessly
+        if (convIdToSend && chatApiErr && (chatApiErr.status === 404 || (chatApiErr.message && chatApiErr.message.includes('Conversation not found')))) {
+          console.warn('Stale conversation ID encountered. Retrying with fresh session...');
+          currentConversationId = '';
+          localStorage.removeItem('aster_active_conv_id');
+          data = await api('/api/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              message,
+              selected_doc_id: ($('documentSelect') && $('documentSelect').value) || null,
+              conversation_id: null,
+              history: [],
+              incognito: isIncognito,
+              detailed: isDetailedMode,
+              mode: activeEngineMode,
+              image_data: curAttached ? curAttached.base64 : null,
+              image_url: curAttached ? curAttached.url : null,
+            }),
+          });
+        } else {
+          throw chatApiErr;
+        }
+      }
 
       pending.remove();
 
@@ -1947,24 +2662,59 @@
         isIncognito
       );
 
+      // Update remaining tokens from response
+      if (data.token_status) {
+        updateTokenDisplay(data.token_status);
+      } else if (typeof data.tokens_remaining !== 'undefined') {
+        updateTokenDisplay({
+          tokens_remaining: data.tokens_remaining,
+          daily_limit: data.daily_limit,
+          out_of_tokens: data.tokens_remaining <= 0,
+        });
+      }
+
     } catch (err) {
-      pending.remove();
-      addMessage('assistant', `I could not complete that query: ${err.message}`, '', [], true, false, null, isIncognito);
-      toast(err.message, true);
+      console.error('sendMessage error:', err);
+      if (pending) pending.remove();
+      if (err && err.message && err.message.includes('Conversation not found')) {
+        currentConversationId = '';
+        localStorage.removeItem('aster_active_conv_id');
+      }
+      const isLimit = err && (err.message.includes('Out of tokens') || err.message.includes('429'));
+      if (isLimit) {
+        updateTokenDisplay({
+          out_of_tokens: true,
+          tokens_remaining: 0,
+        });
+        toast('Out of tokens', true);
+      } else {
+        toast(err.message, true);
+      }
+      addMessage('assistant', `Error: ${err.message}`, '', [], true, false, null, isIncognito);
+    } finally {
+      isSending = false;
+      if (sendBtn) sendBtn.disabled = false;
+      if (homeSendBtn) homeSendBtn.disabled = false;
+      if (box) box.focus();
     }
   }
 
   async function uploadFiles(files) {
     if (!files || !files.length) return;
+    const MAX_UPLOAD_BYTES = 400 * 1024 * 1024; // 400 MB
     let lastUploadedDoc = null;
     for (const file of files) {
+      if (file.size > MAX_UPLOAD_BYTES) {
+        toast('File size exceeds the 400 MB limit. Please upload a file smaller than or equal to 400 MB.', true);
+        continue;
+      }
       const form = new FormData();
       form.append('file', file);
       try {
         toast(`Uploading & indexing ${file.name}…`);
         const res = await api('/api/upload', { method: 'POST', body: form });
         const count = res.document?.chunks_count || 'multiple';
-        toast(`✓ ${file.name} indexed successfully (${count} chunks)`);
+        toast(`${file.name} indexed successfully (${count} chunks)`);
         if (res.document) {
           lastUploadedDoc = res.document;
         }
@@ -1984,8 +2734,62 @@
     }
   }
 
+  function clearAllAuthFields() {
+    if ($('loginForm')) $('loginForm').reset();
+    if ($('signupForm')) $('signupForm').reset();
+    if ($('forgotPasswordForm')) $('forgotPasswordForm').reset();
+    if ($('resetPasswordForm')) $('resetPasswordForm').reset();
+
+    const fieldIds = [
+      'loginIdentifier',
+      'loginPassword',
+      'loginMathAnswer',
+      'signupUsername',
+      'signupEmail',
+      'signupPhone',
+      'signupPassword',
+      'signupMathAnswer',
+      'forgotIdentifier',
+      'forgotMathAnswer',
+      'newPasswordInput',
+      'confirmPasswordInput',
+      'resetTokenHidden',
+    ];
+    fieldIds.forEach((id) => {
+      const el = $(id);
+      if (el) {
+        el.value = '';
+        el.setAttribute('value', '');
+      }
+    });
+
+    if ($('resetErrorMsg')) {
+      $('resetErrorMsg').textContent = '';
+      $('resetErrorMsg').classList.add('hidden');
+    }
+  }
+
+  function ensureLoginFormEmpty() {
+    clearAllAuthFields();
+    setTimeout(() => {
+      if (!isAuthenticated) {
+        if ($('loginIdentifier')) $('loginIdentifier').value = '';
+        if ($('loginPassword')) $('loginPassword').value = '';
+        if ($('loginMathAnswer')) $('loginMathAnswer').value = '';
+      }
+    }, 40);
+    setTimeout(() => {
+      if (!isAuthenticated) {
+        if ($('loginIdentifier')) $('loginIdentifier').value = '';
+        if ($('loginPassword')) $('loginPassword').value = '';
+        if ($('loginMathAnswer')) $('loginMathAnswer').value = '';
+      }
+    }, 150);
+  }
+
   function switchAuthMode(mode) {
     authMode = mode;
+    ensureLoginFormEmpty();
     document.querySelectorAll('.modal-tab').forEach((t) => t.classList.toggle('active', t.dataset.mode === mode));
     $('authHeading').textContent = mode === 'login' ? 'Quick Login' : 'Create Account';
     if ($('loginForm')) $('loginForm').classList.toggle('hidden', mode !== 'login');
@@ -1998,6 +2802,7 @@
   // ==========================================
   let currentLoginChallenge = null;
   let currentSignupChallenge = null;
+  let currentForgotChallenge = null;
 
   async function loadMathChallenge(mode = 'login') {
     try {
@@ -2007,7 +2812,9 @@
         if ($('loginMathQuestion')) {
           $('loginMathQuestion').innerHTML = `<span style="color:#f472b6;">${challenge.num1}</span> <span style="color:#f97316;">${challenge.operation}</span> <span style="color:#f472b6;">${challenge.num2}</span> = ?`;
         }
-        if ($('loginMathAnswer')) $('loginMathAnswer').value = '';
+        if ($('loginMathAnswer')) {
+          $('loginMathAnswer').value = ''; // NEVER pre-fill! Manual user calculation required.
+        }
       }
       if (mode === 'signup' || mode === 'all') {
         currentSignupChallenge = challenge;
@@ -2021,6 +2828,19 @@
     }
   }
 
+  async function loadForgotMathChallenge() {
+    try {
+      const challenge = await api('/api/auth/challenge');
+      currentForgotChallenge = challenge;
+      if ($('forgotMathQuestion')) {
+        $('forgotMathQuestion').innerHTML = `<span style="color:#f472b6;">${challenge.num1}</span> <span style="color:#f97316;">${challenge.operation}</span> <span style="color:#f472b6;">${challenge.num2}</span> = ?`;
+      }
+      if ($('forgotMathAnswer')) $('forgotMathAnswer').value = '';
+    } catch (err) {
+      toast('Failed to load calculation challenge: ' + err.message, true);
+    }
+  }
+
   if ($('loginRefreshChallengeBtn')) {
     $('loginRefreshChallengeBtn').onclick = () => loadMathChallenge('login');
   }
@@ -2029,19 +2849,163 @@
     $('signupRefreshChallengeBtn').onclick = () => loadMathChallenge('signup');
   }
 
-  // Handle Math Calculation Login
+  if ($('forgotRefreshChallengeBtn')) {
+    $('forgotRefreshChallengeBtn').onclick = () => loadForgotMathChallenge();
+  }
+
+  // Password visibility toggle
+  if ($('toggleLoginPasswordBtn')) {
+    $('toggleLoginPasswordBtn').onclick = () => {
+      const inp = $('loginPassword');
+      if (inp) {
+        inp.type = inp.type === 'password' ? 'text' : 'password';
+      }
+    };
+  }
+
+  // Forgot Password Modal Triggers
+  if ($('forgotPasswordLinkBtn')) {
+    $('forgotPasswordLinkBtn').onclick = () => {
+      if ($('authModal')) $('authModal').classList.add('hidden');
+      if ($('forgotPasswordModal')) {
+        $('forgotPasswordModal').classList.remove('hidden');
+        if ($('forgotPasswordForm')) $('forgotPasswordForm').classList.remove('hidden');
+        if ($('resetPasswordForm')) $('resetPasswordForm').classList.add('hidden');
+        loadForgotMathChallenge();
+      }
+    };
+  }
+
+  if ($('closeForgotModal')) {
+    $('closeForgotModal').onclick = () => {
+      if ($('forgotPasswordModal')) $('forgotPasswordModal').classList.add('hidden');
+    };
+  }
+
+  if ($('backToLoginFromForgotBtn')) {
+    $('backToLoginFromForgotBtn').onclick = () => {
+      if ($('forgotPasswordModal')) $('forgotPasswordModal').classList.add('hidden');
+      if ($('authModal')) {
+        $('authModal').classList.remove('hidden');
+        switchAuthMode('login');
+      }
+    };
+  }
+
+  // Handle Forgot Password Step 1 (Request reset token with math check)
+  if ($('forgotPasswordForm')) {
+    $('forgotPasswordForm').onsubmit = async (e) => {
+      e.preventDefault();
+      const identifier = $('forgotIdentifier') ? $('forgotIdentifier').value.trim() : '';
+      const ansVal = $('forgotMathAnswer') ? $('forgotMathAnswer').value.trim() : '';
+      const calculation_result = parseInt(ansVal, 10);
+
+      if (!identifier) {
+        toast('Please enter your account identifier', true);
+        return;
+      }
+      if (isNaN(calculation_result)) {
+        toast('Please calculate and enter the answer to the math problem', true);
+        return;
+      }
+      if (!currentForgotChallenge) {
+        toast('Challenge expired, refreshing…', true);
+        await loadForgotMathChallenge();
+        return;
+      }
+
+      try {
+        toast('Verifying identity & math calculation…');
+        const res = await api('/api/auth/forgot-password', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            identifier,
+            challenge_token: currentForgotChallenge.challenge_token,
+            calculation_result,
+          }),
+        });
+
+        if (res.reset_token) {
+          $('resetTokenHidden').value = res.reset_token;
+          $('forgotPasswordForm').classList.add('hidden');
+          $('resetPasswordForm').classList.remove('hidden');
+          if ($('resetErrorMsg')) $('resetErrorMsg').classList.add('hidden');
+          toast('Identity verified! Please enter your new password.');
+        } else {
+          toast(res.message || 'Verification complete.');
+        }
+      } catch (err) {
+        toast(err.message, true);
+        loadForgotMathChallenge();
+      }
+    };
+  }
+
+  // Handle Forgot Password Step 2 (Reset Password)
+  if ($('resetPasswordForm')) {
+    $('resetPasswordForm').onsubmit = async (e) => {
+      e.preventDefault();
+      const reset_token = $('resetTokenHidden').value;
+      const new_password = $('newPasswordInput').value;
+      const confirm_password = $('confirmPasswordInput').value;
+
+      if (!new_password) {
+        toast('Please enter a new password', true);
+        return;
+      }
+      if (new_password !== confirm_password) {
+        toast('Passwords do not match', true);
+        return;
+      }
+
+      try {
+        toast('Updating password…');
+        const res = await api('/api/auth/reset-password', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            reset_token,
+            new_password,
+            new_password_confirm: confirm_password,
+          }),
+        });
+
+        toast(res.message || 'Password reset successfully!');
+        if ($('forgotPasswordModal')) $('forgotPasswordModal').classList.add('hidden');
+        if ($('authModal')) {
+          $('authModal').classList.remove('hidden');
+          switchAuthMode('login');
+        }
+      } catch (err) {
+        if ($('resetErrorMsg')) {
+          $('resetErrorMsg').textContent = err.message;
+          $('resetErrorMsg').classList.remove('hidden');
+        }
+        toast(err.message, true);
+      }
+    };
+  }
+
+  // Handle Math Calculation Login (Requires BOTH math challenge and password)
   if ($('loginForm')) {
     $('loginForm').onsubmit = async (e) => {
       e.preventDefault();
-      const identifier = $('loginIdentifier').value.trim();
-      const calculation_result = parseInt($('loginMathAnswer').value.trim(), 10);
+      const identifier = $('loginIdentifier') ? $('loginIdentifier').value.trim() : '';
+      const password = $('loginPassword') ? $('loginPassword').value : '';
+      const ansVal = $('loginMathAnswer') ? $('loginMathAnswer').value.trim() : '';
+      const calculation_result = parseInt(ansVal, 10);
 
       if (!identifier) {
         toast('Please enter your phone number, email, or username', true);
         return;
       }
+      if (!password) {
+        toast('Please enter your password', true);
+        return;
+      }
       if (isNaN(calculation_result)) {
-        toast('Please enter your calculation result', true);
+        toast('Please calculate and enter the answer to the math problem', true);
         return;
       }
       if (!currentLoginChallenge) {
@@ -2052,32 +3016,50 @@
 
       try {
         toast('Verifying calculation & logging in…');
+        const payload = {
+          identifier,
+          password,
+          challenge_token: currentLoginChallenge.challenge_token,
+          calculation_result,
+        };
+
         const result = await api('/api/auth/login', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            identifier,
-            challenge_token: currentLoginChallenge.challenge_token,
-            calculation_result,
-          }),
+          body: JSON.stringify(payload),
         });
-        token = result.access_token;
+        // Session is persisted via 1-year HttpOnly cookie (`astra_session`).
+        // Keep in-memory bearer token active during the active session.
+        token = result.access_token || '';
+        isAuthenticated = true;
         user = result.user;
         cachedUsername = (user && user.username) || identifier;
-        localStorage.setItem('aster_token', token);
+        guestToken = '';
+        localStorage.removeItem('astra_guest_token');
+        localStorage.removeItem('aster_token');
         localStorage.setItem('aster_username', cachedUsername);
-        $('authModal').classList.add('hidden');
+        if (user) {
+          localStorage.setItem('aster_user', JSON.stringify({
+            id: user.id,
+            email: user.email,
+            username: cachedUsername,
+            role: user.role,
+          }));
+        }
+        if ($('authModal')) $('authModal').classList.add('hidden');
+        if ($('closeAuthModal')) $('closeAuthModal').classList.remove('hidden');
         toast(`Welcome back, ${cachedUsername}!`);
         updateAuthUI();
         refreshDocuments();
-        refreshConversations();
+        refreshConversations(true);
+        fetchTokenStatus();
       } catch (err) {
         toast(err.message, true);
-        // Refresh challenge on error
         loadMathChallenge('login');
       }
     };
   }
+
 
   // Handle Math Calculation Registration
   if ($('signupForm')) {
@@ -2088,13 +3070,25 @@
       const phone = $('signupPhone') ? $('signupPhone').value.trim() : '';
       const password = $('signupPassword').value;
       const calculation_result = parseInt($('signupMathAnswer').value.trim(), 10);
+      const termsConsent = $('signupTermsConsent') ? $('signupTermsConsent').checked : false;
 
       if (!username || !email || !password) {
         toast('Please fill in username, email, and password', true);
         return;
       }
+      if (!termsConsent) {
+        toast('Please agree to the Terms & Conditions and Privacy Policy to create an account.', true);
+        return;
+      }
+      if (phone) {
+        const phoneDigits = phone.replace(/\D/g, '');
+        if (phoneDigits.length < 10) {
+          toast('Please enter a valid phone number with at least 10 digits', true);
+          return;
+        }
+      }
       if (isNaN(calculation_result)) {
-        toast('Please enter the result of the calculation', true);
+        toast('Please calculate and enter the answer to the math problem', true);
         return;
       }
       if (!currentSignupChallenge) {
@@ -2115,18 +3109,34 @@
             password,
             challenge_token: currentSignupChallenge.challenge_token,
             calculation_result,
+            agreed_to_terms: true,
           }),
         });
-        token = result.access_token;
+        // Session is persisted via 1-year HttpOnly cookie (`astra_session`).
+        // Keep in-memory bearer token active during the active session.
+        token = result.access_token || '';
+        isAuthenticated = true;
         user = result.user;
         cachedUsername = (user && user.username) || username;
-        localStorage.setItem('aster_token', token);
+        guestToken = '';
+        localStorage.removeItem('astra_guest_token');
+        localStorage.removeItem('aster_token');
         localStorage.setItem('aster_username', cachedUsername);
-        $('authModal').classList.add('hidden');
+        if (user) {
+          localStorage.setItem('aster_user', JSON.stringify({
+            id: user.id,
+            email: user.email,
+            username: cachedUsername,
+            role: user.role,
+          }));
+        }
+        if ($('authModal')) $('authModal').classList.add('hidden');
+        if ($('closeAuthModal')) $('closeAuthModal').classList.remove('hidden');
         toast(`Account created! Welcome, ${cachedUsername}!`);
         updateAuthUI();
         refreshDocuments();
-        refreshConversations();
+        refreshConversations(true);
+        fetchTokenStatus();
       } catch (err) {
         toast(err.message, true);
         loadMathChallenge('signup');
@@ -2135,26 +3145,36 @@
   }
 
   // Event Listeners
-  if ($('chatForm')) $('chatForm').onsubmit = sendMessage;
-  if ($('sendButton')) $('sendButton').onclick = (e) => {
-    e.preventDefault();
-    sendMessage();
+  const submitHandler = (e) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    sendMessage(e);
+    return false;
   };
-  if ($('composerHomeSendBtn')) $('composerHomeSendBtn').onclick = (e) => {
-    e.preventDefault();
-    sendMessage();
-  };
+
+  if ($('chatForm')) {
+    $('chatForm').onsubmit = submitHandler;
+  }
+  if ($('sendButton')) {
+    $('sendButton').onclick = submitHandler;
+  }
+  if ($('composerHomeSendBtn')) {
+    $('composerHomeSendBtn').onclick = submitHandler;
+  }
   if ($('message')) {
-    $('message').onkeydown = (e) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
+    $('message').addEventListener('keydown', (e) => {
+      if ((e.key === 'Enter' || e.keyCode === 13) && !e.shiftKey) {
         e.preventDefault();
-        sendMessage();
+        e.stopPropagation();
+        sendMessage(e);
       }
-    };
-    $('message').oninput = (e) => {
+    });
+    $('message').addEventListener('input', (e) => {
       e.target.style.height = 'auto';
       e.target.style.height = `${Math.min(e.target.scrollHeight, 200)}px`;
-    };
+    });
   }
 
   // ==========================================
@@ -2162,38 +3182,251 @@
   // ==========================================
   let speechRecognition = null;
   let isListening = false;
-  let voiceSimTimer = null;
+  let isRequestingMic = false;
+  let shouldRestartVoice = false;
+  let voiceInitialText = '';
+  let voiceSafetyTimer = null;
+  let micPermissionState = 'prompt'; // 'prompt' | 'granted' | 'denied'
+
+  // Initialize permission watcher to dynamically track browser permission changes
+  if (typeof navigator !== 'undefined' && navigator.permissions && navigator.permissions.query) {
+    try {
+      navigator.permissions.query({ name: 'microphone' }).then((status) => {
+        micPermissionState = status.state;
+        status.onchange = () => {
+          micPermissionState = status.state;
+          if (status.state === 'denied' && isListening) {
+            stopVoiceRecognition();
+          }
+        };
+      }).catch(() => {});
+    } catch (_) {}
+  }
 
   function setVoiceActive(active) {
     const pill = $('voiceSearchPill');
     const wave = $('voiceWaveform');
+    const homePill = $('composerHomeMicPill');
+    const homeWave = $('composerHomeVoiceWaveform');
     const micBtn = $('composerMicBtn');
     const homeMicBtn = $('composerHomeMicBtn');
+    const msgInput = $('message');
 
     if (pill) pill.classList.toggle('active', active);
     if (wave) wave.classList.toggle('hidden', !active);
+    if (homePill) homePill.classList.toggle('active', active);
+    if (homeWave) homeWave.classList.toggle('hidden', !active);
     if (micBtn) micBtn.classList.toggle('recording', active);
     if (homeMicBtn) homeMicBtn.classList.toggle('recording', active);
+
+    if (msgInput) {
+      if (active) {
+        msgInput.setAttribute('data-prev-placeholder', msgInput.placeholder || 'Type here');
+        msgInput.placeholder = 'Listening… Speak now';
+      } else {
+        const prev = msgInput.getAttribute('data-prev-placeholder');
+        if (prev) msgInput.placeholder = prev;
+      }
+    }
   }
 
   function stopVoiceRecognition() {
+    isListening = false;
+    isRequestingMic = false;
+    shouldRestartVoice = false;
+    if (voiceSafetyTimer) {
+      clearTimeout(voiceSafetyTimer);
+      voiceSafetyTimer = null;
+    }
+    setVoiceActive(false);
+
     if (speechRecognition) {
       try {
         speechRecognition.abort();
-      } catch (_) {}
-      try {
-        speechRecognition.stop();
-      } catch (_) {}
+      } catch (_) {
+        try { speechRecognition.stop(); } catch (__) {}
+      }
       speechRecognition = null;
     }
-    if (voiceSimTimer) {
-      clearTimeout(voiceSimTimer);
-      voiceSimTimer = null;
-    }
-    isListening = false;
-    setVoiceActive(false);
+
     if ($('voiceListeningBadge')) $('voiceListeningBadge').classList.add('hidden');
     if ($('composerAttachBtn')) $('composerAttachBtn').classList.remove('active');
+  }
+
+  async function checkAndRequestMicPermission() {
+    // 1. Verify Web Speech API support
+    const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRec) {
+      toast('Speech recognition is not supported in this browser. Please use Chrome, Edge, or Safari.', true);
+      return false;
+    }
+
+    // 2. Query Permissions API if available to check state dynamically
+    if (typeof navigator !== 'undefined' && navigator.permissions && navigator.permissions.query) {
+      try {
+        const status = await navigator.permissions.query({ name: 'microphone' });
+        micPermissionState = status.state; // 'granted', 'prompt', or 'denied'
+        status.onchange = () => {
+          micPermissionState = status.state;
+          if (status.state === 'denied' && isListening) {
+            stopVoiceRecognition();
+          }
+        };
+      } catch (_) {}
+    }
+
+    // 3. If already granted, immediately return true without touching getUserMedia
+    // (Bypassing getUserMedia avoids hardware teardown race conditions on Windows/Chrome audio devices)
+    if (micPermissionState === 'granted') {
+      return true;
+    }
+
+    // 4. If explicitly denied, provide clear instruction to change site settings in address bar
+    if (micPermissionState === 'denied') {
+      toast('Microphone access is blocked in your browser settings. Click the lock/tune icon in the address bar to allow Microphone, then try again.', true);
+      return false;
+    }
+
+    // 5. In 'prompt' state or where Permissions API is unsupported, verify mediaDevices & prompt cleanly
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      // In insecure contexts or browsers without mediaDevices
+      // Some browsers (like desktop Chrome) still allow SpeechRecognition directly
+      return true;
+    }
+
+    try {
+      isRequestingMic = true;
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      micPermissionState = 'granted';
+      if (stream) {
+        stream.getTracks().forEach((track) => {
+          try { track.stop(); } catch (_) {}
+        });
+      }
+      isRequestingMic = false;
+      return true;
+    } catch (err) {
+      isRequestingMic = false;
+      console.warn('Microphone getUserMedia error:', err);
+      const name = err.name || '';
+      if (name === 'NotAllowedError' || name === 'PermissionDeniedError') {
+        micPermissionState = 'denied';
+        toast('Microphone access was denied. Please allow microphone access in your browser settings to speak.', true);
+      } else if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
+        toast('No microphone found on your device. Please connect a microphone and try again.', true);
+      } else if (name === 'NotReadableError' || name === 'TrackStartError') {
+        toast('Microphone is currently in use by another application. Please free the device and try again.', true);
+      } else if (name === 'SecurityError') {
+        toast('Microphone access is blocked by browser security policy.', true);
+      } else {
+        toast('Microphone access could not be acquired. Please check browser settings.', true);
+      }
+      return false;
+    }
+  }
+
+  // Context-aware speech transcription normalizer: technical terminology, mathematics, punctuation
+  function cleanAndFormatSpeechTranscription(rawText) {
+    if (!rawText) return '';
+    let text = rawText.trim();
+
+    // 1. Remove vocal filler and hesitations
+    text = text.replace(/\b(um+|uh+|er+|ah+|like\s+like|you\s+know)\b/gi, '');
+
+    // 2. Technical terminology mapping FIRST so compounds like "see plus plus" are preserved
+    const techTerms = [
+      [/\b(?:see|c)\s*(?:plus\s*plus|\+\s*\+)\b/gi, 'C++'],
+      [/\b(?:see|c)\s*sharp\b/gi, 'C#'],
+      [/\bpipe\s*torch\b/gi, 'PyTorch'],
+      [/\bpytorch\b/gi, 'PyTorch'],
+      [/\btensor\s*flow\b/gi, 'TensorFlow'],
+      [/\bterraform\b/gi, 'Terraform'],
+      [/\bfast\s*a\s*p\s*i\b|\bfast\s*api\b/gi, 'FastAPI'],
+      [/\bpost\s*gress\b|\bpostgres\s*q\s*l\b/gi, 'PostgreSQL'],
+      [/\bmy\s*s\s*q\s*l\b|\bmysql\b/gi, 'MySQL'],
+      [/\bs\s*q\s*l\b/gi, 'SQL'],
+      [/\bno\s*s\s*q\s*l\b|\bnosql\b/gi, 'NoSQL'],
+      [/\bj\s*son\b|\bjay\s*son\b/gi, 'JSON'],
+      [/\ba\s*p\s*i\b/gi, 'API'],
+      [/\bu\s*r\s*l\b/gi, 'URL'],
+      [/\bh\s*t\s*t\s*p\s*s?\b/gi, (m) => m.toUpperCase()],
+      [/\bh\s*t\s*m\s*l\b/gi, 'HTML'],
+      [/\bc\s*s\s*s\b/gi, 'CSS'],
+      [/\bgit\s*hub\b/gi, 'GitHub'],
+      [/\bgit\s*lab\b/gi, 'GitLab'],
+      [/\bnode\s*j\s*s\b|\bnode\s*js\b/gi, 'Node.js'],
+      [/\bnext\s*j\s*s\b|\bnext\s*js\b/gi, 'Next.js'],
+      [/\breact\s*j\s*s\b|\breact\s*js\b/gi, 'React'],
+      [/\bvue\s*j\s*s\b|\bvue\s*js\b/gi, 'Vue.js'],
+      [/\bdot\s*js\b/gi, '.js'],
+      [/\bdot\s*py\b/gi, '.py'],
+      [/\bdot\s*ts\b/gi, '.ts'],
+      [/\bdot\s*html\b/gi, '.html'],
+      [/\bdot\s*css\b/gi, '.css'],
+      [/\bdot\s*json\b/gi, '.json'],
+      [/\bq\s*drant\b/gi, 'Qdrant'],
+      [/\br\s*a\s*g\b/gi, 'RAG'],
+      [/\bl\s*l\s*m\b/gi, 'LLM'],
+      [/\bgpu\b/gi, 'GPU'],
+      [/\bcpu\b/gi, 'CPU'],
+      [/\bconsole\s*dot\s*log\b/gi, 'console.log'],
+    ];
+
+    for (const [pattern, replacement] of techTerms) {
+      text = text.replace(pattern, replacement);
+    }
+
+    // 3. Remove accidental stutter / duplicate repeated words (e.g., "the the", "I I", "is is")
+    text = text.replace(/\b([a-zA-Z]{2,})\s+\1\b/gi, '$1');
+
+    // 4. Mathematical terms and spoken notation formatting
+    const mathTerms = [
+      [/\b([a-zA-Z])\s+squared\b/gi, '$1^2'],
+      [/\b([a-zA-Z])\s+cubed\b/gi, '$1^3'],
+      [/\bto the power of\b/gi, '^'],
+      [/\braised to(?: the power of)?\b/gi, '^'],
+      [/\bsquare root of\s*([0-9a-zA-Z\(\)]+)/gi, 'sqrt($1)'],
+      [/\bcube root of\s*([0-9a-zA-Z\(\)]+)/gi, 'cbrt($1)'],
+      [/\bplus or minus\b/gi, '±'],
+      [/\bdivided by\b/gi, '/'],
+      [/\bmultiplied by\b/gi, '*'],
+      [/\btimes\b/gi, '*'],
+      [/\bplus\b/gi, '+'],
+      [/\bminus\b/gi, '-'],
+      [/\bequals\b|\bis equal to\b/gi, '='],
+      [/\bnot equal to\b/gi, '≠'],
+      [/\bless than or equal to\b/gi, '≤'],
+      [/\bgreater than or equal to\b/gi, '≥'],
+      [/\bintegral of\b/gi, 'integrate'],
+      [/\bderivative of\b/gi, 'derivative of'],
+      [/\blimit as x approaches\b/gi, 'limit as x ->'],
+      [/\bpercent of\b/gi, '% of'],
+      [/\bpercentage of\b/gi, '% of'],
+    ];
+
+    for (const [pattern, replacement] of mathTerms) {
+      text = text.replace(pattern, replacement);
+    }
+
+    // Contextual math "pie" -> "pi"
+    text = text.replace(/\b(?:value of\s+)?pie\b(?=\s*(?:over|\/|\*|\^|\+|-|\d|r|radians|\)|$))/gi, 'pi');
+    text = text.replace(/(\d+)\s*pie\b/gi, '$1*pi');
+
+    // 5. Whitespace cleanup
+    text = text.replace(/\s{2,}/g, ' ').trim();
+
+    // 6. Sentence capitalization
+    if (text.length > 0) {
+      text = text.charAt(0).toUpperCase() + text.slice(1);
+    }
+
+    // 7. Auto-punctuate interrogative queries
+    const questionStarters = /^(what|how|why|where|when|who|which|can you|could you|would you|is there|are there|does|do)\b/i;
+    if (questionStarters.test(text) && !/[?!.]$/.test(text)) {
+      text += '?';
+    }
+
+    return text;
   }
 
   function startVoiceRecognition() {
@@ -2204,80 +3437,152 @@
 
     const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRec) {
-      isListening = true;
-      setVoiceActive(true);
-      voiceSimTimer = setTimeout(() => {
-        stopVoiceRecognition();
-      }, 7000);
+      toast('Speech recognition is not supported in this browser.', true);
       return;
     }
 
+    isListening = true;
+    shouldRestartVoice = true;
+    setVoiceActive(true);
+
+    // Auto-stop safety timeout after 90s of continuous listening so it doesn't drain battery
+    if (voiceSafetyTimer) clearTimeout(voiceSafetyTimer);
+    voiceSafetyTimer = setTimeout(() => {
+      if (isListening) stopVoiceRecognition();
+    }, 90000);
+
     try {
+      if (speechRecognition) {
+        try { speechRecognition.abort(); } catch (_) {}
+        speechRecognition = null;
+      }
+
       speechRecognition = new SpeechRec();
       speechRecognition.continuous = true;
       speechRecognition.interimResults = true;
-      speechRecognition.lang = 'en-US';
+      speechRecognition.lang = navigator.language || 'en-US';
 
-      const initialText = $('message').value;
+      voiceInitialText = $('message') ? $('message').value : '';
 
       speechRecognition.onstart = () => {
         isListening = true;
         setVoiceActive(true);
-        $('message').focus();
       };
 
       speechRecognition.onresult = (event) => {
-        let sessionTranscript = '';
+        let finalTranscript = '';
+        let interimTranscript = '';
         for (let i = 0; i < event.results.length; i++) {
-          sessionTranscript += event.results[i][0].transcript;
+          const item = event.results[i];
+          const text = item[0] ? item[0].transcript : '';
+          if (item.isFinal) {
+            finalTranscript += (finalTranscript ? ' ' : '') + text.trim();
+          } else {
+            interimTranscript += (interimTranscript ? ' ' : '') + text.trim();
+          }
         }
-        const separator = initialText && !initialText.endsWith(' ') ? ' ' : '';
-        $('message').value = initialText ? `${initialText}${separator}${sessionTranscript}` : sessionTranscript;
+        let fullTranscript = finalTranscript;
+        if (interimTranscript) {
+          fullTranscript = fullTranscript ? `${fullTranscript} ${interimTranscript}` : interimTranscript;
+        }
+
+        const cleaned = cleanAndFormatSpeechTranscription(fullTranscript);
+        if ($('message')) {
+          const separator = voiceInitialText && !voiceInitialText.endsWith(' ') ? ' ' : '';
+          $('message').value = voiceInitialText ? `${voiceInitialText}${separator}${cleaned}` : cleaned;
+          $('message').dispatchEvent(new Event('input', { bubbles: true }));
+        }
       };
 
       speechRecognition.onerror = (event) => {
-        console.warn('Speech recognition notice:', event.error);
-        stopVoiceRecognition();
+        console.warn('Speech recognition event error:', event.error);
+        if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+          micPermissionState = 'denied';
+          toast('Microphone access was denied. Please allow microphone in browser settings.', true);
+          stopVoiceRecognition();
+        } else if (event.error === 'audio-capture') {
+          toast('Microphone device is busy or unavailable.', true);
+          stopVoiceRecognition();
+        } else if (event.error === 'network') {
+          toast('Speech recognition requires an active network connection.', true);
+          stopVoiceRecognition();
+        } else if (event.error === 'no-speech' || event.error === 'aborted') {
+          // Graceful silence or user pause, do not stop or show error
+        }
       };
 
       speechRecognition.onend = () => {
-        stopVoiceRecognition();
+        // If still listening and not manually stopped, keep session alive
+        if (isListening && shouldRestartVoice) {
+          try {
+            speechRecognition.start();
+          } catch (_) {
+            setTimeout(() => {
+              if (isListening && shouldRestartVoice) {
+                try { speechRecognition.start(); } catch (__) {}
+              }
+            }, 250);
+          }
+        } else {
+          setVoiceActive(false);
+        }
       };
 
       speechRecognition.start();
     } catch (err) {
-      console.error('Failed to start speech recognition:', err);
-      isListening = true;
-      setVoiceActive(true);
-      voiceSimTimer = setTimeout(() => stopVoiceRecognition(), 5000);
+      console.warn('Speech recognition start failed:', err);
+      stopVoiceRecognition();
     }
   }
 
-  if ($('composerMicBtn')) {
-    $('composerMicBtn').onclick = (e) => {
+  async function handleMicClick(e) {
+    if (e) {
       e.preventDefault();
-      if (isListening) {
-        stopVoiceRecognition();
-      } else {
-        startVoiceRecognition();
+      e.stopPropagation();
+      if (e.currentTarget && e.currentTarget.blur) e.currentTarget.blur();
+    }
+    if (isListening) {
+      stopVoiceRecognition();
+      return;
+    }
+
+    const permitted = await checkAndRequestMicPermission();
+    if (!permitted) {
+      stopVoiceRecognition();
+      return;
+    }
+
+    startVoiceRecognition();
+  }
+
+  if ($('composerMicBtn')) {
+    $('composerMicBtn').onclick = handleMicClick;
+  }
+
+  if ($('composerHomeMicBtn')) {
+    $('composerHomeMicBtn').onclick = handleMicClick;
+  }
+
+  if ($('voiceSearchPill')) {
+    $('voiceSearchPill').onclick = (e) => {
+      // Clicking the red capsule directly stops voice
+      if (isListening && e.target === $('voiceSearchPill')) {
+        handleMicClick(e);
       }
     };
   }
 
-  if ($('composerHomeMicBtn')) {
-    $('composerHomeMicBtn').onclick = (e) => {
-      e.preventDefault();
-      if (isListening) {
-        stopVoiceRecognition();
-      } else {
-        startVoiceRecognition();
+  if ($('composerHomeMicPill')) {
+    $('composerHomeMicPill').onclick = (e) => {
+      if (isListening && e.target === $('composerHomeMicPill')) {
+        handleMicClick(e);
       }
     };
   }
 
   if ($('cancelRecordingBtn')) {
     $('cancelRecordingBtn').onclick = (e) => {
-      e.preventDefault();
+      if (e) e.preventDefault();
       stopVoiceRecognition();
     };
   }
@@ -2334,6 +3639,295 @@
         startVoiceRecognition();
       };
     }
+
+    // Dropdown Option 3: Camera / Take Photograph
+    if ($('actionCamera')) {
+      $('actionCamera').onclick = () => {
+        $('attachDropdown').classList.add('hidden');
+        if ($('composerAttachBtn')) $('composerAttachBtn').classList.remove('active');
+        openCameraModal();
+      };
+    }
+  }
+
+  // ==========================================
+  // Camera & Image Attachment System
+  // ==========================================
+  let cameraMediaStream = null;
+  let currentFacingMode = 'environment'; // 'environment' for rear, 'user' for front/selfie
+  let capturedSnapshotData = null;
+
+  function setComposerAttachedImage(dataUrl, name) {
+    const filename = name || 'Photograph.jpg';
+    attachedImage = {
+      base64: dataUrl,
+      url: null,
+      name: filename,
+    };
+
+    const chip = $('composerImagePreview');
+    const thumb = $('composerImageThumb');
+    const label = $('composerImageLabel');
+
+    if (thumb) thumb.src = dataUrl;
+    if (label) label.textContent = filename;
+    if (chip) chip.classList.remove('hidden');
+
+    // Asynchronously upload to server to get persistent static URL
+    api('/api/chat/upload-image', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image_data: dataUrl, filename }),
+    }).then((res) => {
+      if (res && res.image_url && attachedImage) {
+        attachedImage.url = res.image_url;
+      }
+    }).catch((err) => {
+      console.warn('Image upload background persistence error:', err);
+    });
+
+    const box = $('message');
+    if (box) box.focus();
+  }
+
+  function clearComposerAttachedImage() {
+    attachedImage = null;
+    const chip = $('composerImagePreview');
+    const thumb = $('composerImageThumb');
+    if (chip) chip.classList.add('hidden');
+    if (thumb) thumb.src = '';
+  }
+
+  if ($('removeImageBtn')) {
+    $('removeImageBtn').onclick = (e) => {
+      e.stopPropagation();
+      clearComposerAttachedImage();
+    };
+  }
+
+  async function startCameraStream() {
+    const video = $('cameraVideo');
+    const errBanner = $('cameraErrorBanner');
+    const errText = $('cameraErrorText');
+    const scanOverlay = $('cameraOverlayScan');
+
+    if (errBanner) errBanner.classList.add('hidden');
+    if (scanOverlay) scanOverlay.classList.remove('hidden');
+
+    // Stop any existing tracks
+    if (cameraMediaStream) {
+      cameraMediaStream.getTracks().forEach((t) => {
+        try { t.stop(); } catch (_) {}
+      });
+      cameraMediaStream = null;
+    }
+
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      if (errBanner) {
+        errBanner.classList.remove('hidden');
+        if (errText) errText.textContent = 'Camera API is not supported in this browser. Please upload an image directly.';
+      }
+      return;
+    }
+
+    try {
+      const constraints = {
+        video: {
+          facingMode: currentFacingMode,
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+        },
+        audio: false,
+      };
+
+      cameraMediaStream = await navigator.mediaDevices.getUserMedia(constraints);
+      if (video) {
+        video.srcObject = cameraMediaStream;
+        await video.play();
+      }
+    } catch (err) {
+      console.warn('Camera getUserMedia error:', err);
+      // Fallback: try without specific facingMode if first attempt failed
+      try {
+        cameraMediaStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        if (video) {
+          video.srcObject = cameraMediaStream;
+          await video.play();
+          return;
+        }
+      } catch (fallbackErr) {
+        console.warn('Camera fallback error:', fallbackErr);
+      }
+
+      if (errBanner) {
+        errBanner.classList.remove('hidden');
+        if (errText) {
+          if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+            errText.textContent = 'Camera permission was denied. Please allow camera access in your browser or app settings, or choose an image file below.';
+          } else if (err.name === 'NotFoundError') {
+            errText.textContent = 'No camera device was detected on this system. You can upload an image file from your device.';
+          } else {
+            errText.textContent = `Could not access camera (${err.name || 'Error'}). Please upload an image from your device.`;
+          }
+        }
+      }
+    }
+  }
+
+  function openCameraModal() {
+    const modal = $('cameraModal');
+    if (!modal) return;
+
+    // Reset to live camera state
+    const video = $('cameraVideo');
+    const canvas = $('cameraCanvas');
+    const capturedImg = $('cameraCapturedImg');
+    const liveControls = $('cameraLiveControls');
+    const reviewControls = $('cameraReviewControls');
+    const errBanner = $('cameraErrorBanner');
+
+    if (video) video.classList.remove('hidden');
+    if (canvas) canvas.classList.add('hidden');
+    if (capturedImg) {
+      capturedImg.classList.add('hidden');
+      capturedImg.src = '';
+    }
+    if (liveControls) liveControls.classList.remove('hidden');
+    if (reviewControls) reviewControls.classList.add('hidden');
+    if (errBanner) errBanner.classList.add('hidden');
+
+    capturedSnapshotData = null;
+    modal.classList.remove('hidden');
+    startCameraStream();
+  }
+
+  function closeCameraModal() {
+    const modal = $('cameraModal');
+    if (modal) modal.classList.add('hidden');
+
+    if (cameraMediaStream) {
+      cameraMediaStream.getTracks().forEach((t) => {
+        try { t.stop(); } catch (_) {}
+      });
+      cameraMediaStream = null;
+    }
+
+    const video = $('cameraVideo');
+    if (video) video.srcObject = null;
+    capturedSnapshotData = null;
+  }
+
+  function switchCameraFacing() {
+    currentFacingMode = (currentFacingMode === 'user' ? 'environment' : 'user');
+    startCameraStream();
+  }
+
+  function takeCameraSnapshot() {
+    const video = $('cameraVideo');
+    const canvas = $('cameraCanvas');
+    const capturedImg = $('cameraCapturedImg');
+    const liveControls = $('cameraLiveControls');
+    const reviewControls = $('cameraReviewControls');
+
+    if (!video || !canvas || !capturedImg) return;
+
+    const width = video.videoWidth || 640;
+    const height = video.videoHeight || 480;
+    canvas.width = width;
+    canvas.height = height;
+
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(video, 0, 0, width, height);
+
+    capturedSnapshotData = canvas.toDataURL('image/jpeg', 0.92);
+    capturedImg.src = capturedSnapshotData;
+
+    video.classList.add('hidden');
+    capturedImg.classList.remove('hidden');
+    if (liveControls) liveControls.classList.add('hidden');
+    if (reviewControls) reviewControls.classList.remove('hidden');
+  }
+
+  function retakeCameraSnapshot() {
+    const video = $('cameraVideo');
+    const capturedImg = $('cameraCapturedImg');
+    const liveControls = $('cameraLiveControls');
+    const reviewControls = $('cameraReviewControls');
+
+    capturedSnapshotData = null;
+    if (capturedImg) {
+      capturedImg.classList.add('hidden');
+      capturedImg.src = '';
+    }
+    if (video) video.classList.remove('hidden');
+    if (liveControls) liveControls.classList.remove('hidden');
+    if (reviewControls) reviewControls.classList.add('hidden');
+  }
+
+  function confirmCameraSnapshot() {
+    if (!capturedSnapshotData) return;
+    setComposerAttachedImage(capturedSnapshotData, `Photo_${new Date().toISOString().slice(11, 19).replace(/:/g, '')}.jpg`);
+    closeCameraModal();
+    toast('Photo attached to composer');
+  }
+
+  function handleCameraFileInput(files) {
+    if (!files || !files.length) return;
+    const file = files[0];
+    if (!file.type.startsWith('image/')) {
+      toast('Please select a valid image file.', true);
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const dataUrl = e.target.result;
+      setComposerAttachedImage(dataUrl, file.name);
+      closeCameraModal();
+      toast(`${file.name} attached to composer`);
+    };
+    reader.readAsDataURL(file);
+  }
+
+  // Camera Button Event Listener (inside textbox)
+  if ($('composerCameraBtn')) {
+    $('composerCameraBtn').onclick = openCameraModal;
+  }
+  if ($('closeCameraModal')) {
+    $('closeCameraModal').onclick = closeCameraModal;
+  }
+  if ($('cameraSwitchBtn')) {
+    $('cameraSwitchBtn').onclick = switchCameraFacing;
+  }
+  if ($('cameraShutterBtn')) {
+    $('cameraShutterBtn').onclick = takeCameraSnapshot;
+  }
+  if ($('cameraRetakeBtn')) {
+    $('cameraRetakeBtn').onclick = retakeCameraSnapshot;
+  }
+  if ($('cameraUsePhotoBtn')) {
+    $('cameraUsePhotoBtn').onclick = confirmCameraSnapshot;
+  }
+  if ($('cameraUploadFallbackBtn')) {
+    $('cameraUploadFallbackBtn').onclick = () => {
+      if ($('cameraFileInput')) $('cameraFileInput').click();
+    };
+  }
+  if ($('cameraFallbackUploadBtn')) {
+    $('cameraFallbackUploadBtn').onclick = () => {
+      if ($('cameraFileInput')) $('cameraFileInput').click();
+    };
+  }
+  if ($('cameraFileInput')) {
+    $('cameraFileInput').onchange = (e) => {
+      handleCameraFileInput(e.target.files);
+      e.target.value = '';
+    };
+  }
+  if ($('cameraNativeCaptureInput')) {
+    $('cameraNativeCaptureInput').onchange = (e) => {
+      handleCameraFileInput(e.target.files);
+      e.target.value = '';
+    };
   }
 
   if ($('cancelVoiceBtn')) {
@@ -2349,12 +3943,14 @@
     };
   });
 
-  $('fileInput').onchange = (e) => uploadFiles(e.target.files);
-  $('uploadDrop').ondragover = (e) => e.preventDefault();
-  $('uploadDrop').ondrop = (e) => {
-    e.preventDefault();
-    uploadFiles(e.dataTransfer.files);
-  };
+  if ($('fileInput')) $('fileInput').onchange = (e) => uploadFiles(e.target.files);
+  if ($('uploadDrop')) {
+    $('uploadDrop').ondragover = (e) => e.preventDefault();
+    $('uploadDrop').ondrop = (e) => {
+      e.preventDefault();
+      uploadFiles(e.dataTransfer.files);
+    };
+  }
   window.ondragover = (e) => e.preventDefault();
   window.ondrop = (e) => {
     e.preventDefault();
@@ -2363,7 +3959,8 @@
     }
   };
 
-  $('newChat').onclick = async () => {
+  if ($('newChat')) {
+    $('newChat').onclick = async () => {
     $('messages').innerHTML = '';
     $('welcome').classList.remove('hidden');
     const stage = $('centerStage');
@@ -2392,7 +3989,8 @@
       localStorage.removeItem('aster_active_conv_id');
     }
     toast('Started a new conversation session');
-  };
+    };
+  }
 
   // Wire Private Mode Toggle Buttons (Top right navbar button and Sidebar header icon)
 
@@ -2487,7 +4085,7 @@
       if (!file) return;
 
       if (file.size > 8 * 1024 * 1024) {
-        toast('⚠️ Wallpaper image must be under 8MB', true);
+        toast('Wallpaper image must be under 8MB', true);
         return;
       }
 
@@ -2512,10 +4110,10 @@
         if (customBgStatus) {
           customBgStatus.textContent = `Custom wallpaper: ${file.name}`;
         }
-        toast('✨ Custom background applied successfully!');
+        toast('Custom background applied successfully!');
       };
       reader.onerror = () => {
-        toast('❌ Failed to read background image file', true);
+        toast('Failed to read background image file', true);
       };
       reader.readAsDataURL(file);
     };
@@ -2532,7 +4130,7 @@
       if (customBgStatus) {
         customBgStatus.textContent = 'Default fluid wallpaper active';
       }
-      toast('🔄 Restored default fluid wallpaper');
+      toast('Restored default fluid wallpaper');
     };
   }
 
@@ -2557,33 +4155,6 @@
     if (customBgStatus) customBgStatus.textContent = 'Custom wallpaper active';
   }
 
-  // API Endpoint configuration controls
-  const apiInput = $('apiEndpointInput');
-  const saveApiBtn = $('saveApiEndpointBtn');
-  const resetApiBtn = $('resetApiEndpointBtn');
-  if (apiInput) {
-    apiInput.value = localStorage.getItem('astra_api_base_url') || (window.ASTRA_API_BASE_URL || '');
-    if (saveApiBtn) {
-      saveApiBtn.onclick = () => {
-        const val = (apiInput.value || '').trim();
-        if (val) {
-          localStorage.setItem('astra_api_base_url', val);
-          window.ASTRA_API_BASE_URL = val;
-          toast('Saved API endpoint: ' + val);
-        } else {
-          localStorage.removeItem('astra_api_base_url');
-          toast('Reset to default API endpoint');
-        }
-      };
-    }
-    if (resetApiBtn) {
-      resetApiBtn.onclick = () => {
-        localStorage.removeItem('astra_api_base_url');
-        apiInput.value = window.ASTRA_API_BASE_URL || 'https://astra-ai-agent-production.up.railway.app';
-        toast('Restored default API endpoint');
-      };
-    }
-  }
 
   // User Auth Modal Controls & Gear Icon Routing
   if ($('userAuthBtn')) {
@@ -2594,65 +4165,94 @@
         openSettingsModal();
         return;
       }
+      if (!isAuthenticated) {
+        ensureLoginFormEmpty();
+        authMode = 'login';
+        switchAuthMode('login');
+      }
       $('authModal').classList.remove('hidden');
-      loadMathChallenge(authMode);
+      if (!isAuthenticated) {
+        loadMathChallenge(authMode);
+      }
     };
   }
   if ($('closeAuthModal')) {
     $('closeAuthModal').onclick = () => {
       $('authModal').classList.add('hidden');
+      if (!isAuthenticated) {
+        ensureLoginFormEmpty();
+      }
     };
+  }
+  if ($('authModal')) {
+    $('authModal').addEventListener('click', (e) => {
+      if (e.target === $('authModal')) {
+        $('authModal').classList.add('hidden');
+        if (!isAuthenticated) {
+          ensureLoginFormEmpty();
+        }
+      }
+    });
   }
   document.querySelectorAll('.modal-tab').forEach((t) => (t.onclick = () => switchAuthMode(t.dataset.mode)));
 
-  $('logoutBtn').onclick = () => {
-    // 1. Clear credentials and storage completely
-    token = '';
-    user = null;
-    cachedUsername = '';
-    currentConversationId = '';
-    activeChatHistory = [];
-    localStorage.clear();
+  if ($('logoutBtn')) {
+    $('logoutBtn').onclick = async () => {
+      // 1. Notify server to invalidate session & clear persistent cookies
+      try {
+        await api('/api/auth/logout', { method: 'POST' });
+      } catch (_) {}
 
-    // 2. Hide auth modal
-    $('authModal').classList.add('hidden');
+      // 2. Clear client credentials and local storage completely
+      token = '';
+      isAuthenticated = false;
+      user = null;
+      cachedUsername = '';
+      currentConversationId = '';
+      activeChatHistory = [];
+      localStorage.clear();
 
-    // 3. Reset chat stream and show welcome card
-    $('messages').innerHTML = '';
-    $('welcome').classList.remove('hidden');
-    if ($('message')) {
-      $('message').value = '';
-      $('message').style.height = 'auto';
-    }
+      // Reset device ID and guest token to ensure complete isolation for the new session
+      deviceId = 'dev_' + (window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID() : (Math.random().toString(36).substring(2) + Date.now().toString(36)));
+      localStorage.setItem('astra_device_id', deviceId);
+      guestToken = '';
 
-    // 4. Reset composer document focus tag
-    if ($('activeDocTag')) $('activeDocTag').classList.add('hidden');
-    if ($('activeDocName')) $('activeDocName').textContent = '';
+      // 3. Completely blank out every single login and registration form field
+      ensureLoginFormEmpty();
 
-    // 5. Completely wipe previous user's documents & conversations from the view
-    if ($('documentSelect')) {
-      $('documentSelect').innerHTML = '<option value="">All indexed documents</option>';
-    }
-    if ($('documentList')) {
-      $('documentList').innerHTML = '<p class="muted-box-msg">No documents uploaded yet</p>';
-    }
-    if ($('docCount')) $('docCount').textContent = '0';
-    if ($('conversationList')) {
-      $('conversationList').innerHTML = '<p class="muted-box-msg">No conversations yet</p>';
-    }
+      // 4. Reset chat stream and show welcome card
+      if ($('messages')) $('messages').innerHTML = '';
+      if ($('welcome')) $('welcome').classList.remove('hidden');
+      if ($('message')) {
+        $('message').value = '';
+        $('message').style.height = 'auto';
+      }
+      updateStageMode();
 
-    // 6. Reset auth UI badges and state
-    updateAuthUI();
-    toast('Signed out. Started a completely new session.');
-  };
+      // 5. Reset composer document focus tag
+      if ($('activeDocTag')) $('activeDocTag').classList.add('hidden');
+      if ($('activeDocName')) $('activeDocName').textContent = '';
 
-  // Initialize workspace immediately for everyone
-  initSidebar();
-  refreshDocuments();
-  refreshConversations();
-  checkHealth();
-  shuffleWelcomeTagline();
-  updateStageMode();
+      // 6. Completely wipe previous user's documents & conversations from the view
+      if ($('documentSelect')) {
+        $('documentSelect').innerHTML = '<option value="">All indexed documents</option>';
+      }
+      if ($('documentList')) {
+        $('documentList').innerHTML = '<p class="muted-box-msg">No documents uploaded yet</p>';
+      }
+      if ($('docCount')) $('docCount').textContent = '0';
+      if ($('conversationList')) {
+        $('conversationList').innerHTML = '<p class="muted-box-msg">No conversations yet</p>';
+      }
+
+      // 7. Reset auth UI badges and redirect/present Login screen cleanly
+      authMode = 'login';
+      updateAuthUI();
+      if ($('authModal')) $('authModal').classList.remove('hidden');
+      fetchTokenStatus();
+      toast('Signed out. Session invalidated.');
+    };
+  }
 
   // Popover Menu Controls & Temporary Chat Switch
   const enginePopover = $('modelEnginePopover');
@@ -2702,87 +4302,113 @@
     };
   }
 
-  // Row 2: Astracore 4
+  // Row 2: Astracore 3.1
   if ($('popoverModelAstracore')) {
     $('popoverModelAstracore').onclick = () => {
-      setEngineMode('general');
+      setEngineMode('general', true);
     };
   }
 
-  // Row 3: Astracore 4-O (Coming Soon)
+  // Row 3: Astracore O (Coming Soon)
   if ($('popoverModelAstracoreO')) {
     $('popoverModelAstracoreO').onclick = () => {
-      toast('🚀 Astracore 4-O is coming soon! Stay tuned.');
+      toast('Astracore O is coming soon! Stay tuned.');
     };
   }
 
-  // Dynamic Scrollbar: Show automatically when mouse wheel or trackpad is used, otherwise completely invisible
-  const msgStream = $('messages');
-  if (msgStream) {
-    let scrollTimeout = null;
-    const triggerScrollIndicator = () => {
-      msgStream.classList.add('is-scrolling');
-      if (scrollTimeout) clearTimeout(scrollTimeout);
-      scrollTimeout = setTimeout(() => {
-        msgStream.classList.remove('is-scrolling');
-      }, 850);
-    };
-
-    msgStream.addEventListener('scroll', triggerScrollIndicator, { passive: true });
-    msgStream.addEventListener('wheel', triggerScrollIndicator, { passive: true });
-    msgStream.addEventListener('touchmove', triggerScrollIndicator, { passive: true });
-  }
-
-  // Row: Quick Mode
+  // Row: Quick Mode (Normal/Default Mode - Concise)
   if ($('popoverModeQuick')) {
     $('popoverModeQuick').onclick = () => {
       activeEngineMode = 'general';
-      setDetailedMode(false);
-      updateEngineModeUI();
+      setDetailedMode(false, false);
+      setEngineMode('general', true);
     };
   }
 
-  // Row: Extended Mode
+  // Row: Extended Mode (Normal/Default Mode - Detailed)
   if ($('popoverModeExtended')) {
     $('popoverModeExtended').onclick = () => {
       activeEngineMode = 'general';
-      setDetailedMode(true);
-      updateEngineModeUI();
+      setDetailedMode(true, false);
+      setEngineMode('general', true);
     };
   }
 
-  // Row: Code Mode
+  // Row: Code Mode (Explicit Programming Assistance Mode)
   if ($('popoverModeCode')) {
     $('popoverModeCode').onclick = () => {
-      setEngineMode('code');
+      setEngineMode('code', true);
     };
   }
 
-  // Sync initial detailed mode checkmark UI
-  setDetailedMode(isDetailedMode);
+  // Initialize layout and mode UI without race conditions
+  initSidebar();
+  setDetailedMode(isDetailedMode, false);
   updateEngineLabelUI();
+  shuffleWelcomeTagline();
+  updateStageMode();
+  checkHealth();
+  updateAuthUI();
 
-  if (token) {
-    api('/api/auth/me')
-      .then((data) => {
+  // Restore persistent session on startup BEFORE displaying login UI or loading user data
+  async function restoreSessionOnStartup() {
+    try {
+      const data = await api('/api/auth/me');
+      if (data && data.id && data.role !== 'guest') {
+        isAuthenticated = true;
+        token = data.access_token || '';
         user = data;
-        if (user && user.username) {
-          cachedUsername = user.username;
-          localStorage.setItem('aster_username', cachedUsername);
-        }
+        cachedUsername = data.username || (data.email ? data.email.split('@')[0] : '');
+        localStorage.setItem('aster_username', cachedUsername);
+        localStorage.setItem('aster_user', JSON.stringify({
+          id: data.id,
+          email: data.email,
+          username: cachedUsername,
+          role: data.role,
+        }));
+        authInitialized = true;
         updateAuthUI();
-        refreshConversations();
-      })
-      .catch(() => {
+        if (data.tokens) {
+          updateTokenDisplay(data.tokens);
+        } else {
+          fetchTokenStatus();
+        }
+        await Promise.all([refreshDocuments(), refreshConversations(true)]);
+        return;
+      }
+    } catch (err) {
+      const errMsg = (err && err.message ? err.message.toLowerCase() : '');
+      const isAuthError = (err && err.status === 401) ||
+        errMsg.includes('sign in is required') ||
+        errMsg.includes('unauthorized') ||
+        errMsg.includes('not authenticated') ||
+        errMsg.includes('invalid token') ||
+        errMsg.includes('session expired') ||
+        errMsg.includes('could not validate');
+
+      if (isAuthError) {
+        isAuthenticated = false;
         token = '';
+        user = null;
         cachedUsername = '';
         localStorage.removeItem('aster_token');
         localStorage.removeItem('aster_username');
-        updateAuthUI();
-      });
-  } else {
+        localStorage.removeItem('aster_user');
+      } else {
+        console.warn('Temporary network issue verifying auth status, retaining cached state:', err);
+      }
+    }
+
+    authInitialized = true;
+    if (!isAuthenticated) {
+      ensureLoginFormEmpty();
+    }
     updateAuthUI();
+    fetchTokenStatus();
+    await Promise.all([refreshDocuments(), refreshConversations(true)]);
   }
+
+  restoreSessionOnStartup();
 
   // Support automated test execution via URL parameter
   const autoQuery = new URLSearchParams(window.location.search).get('auto_query');
@@ -2792,40 +4418,6 @@
       $('sendButton').click();
     }, 500);
   }
-
-  // Security: Disable Right-Click Context Menu & Inspection Shortcuts
-  window.addEventListener('contextmenu', (e) => {
-    e.preventDefault();
-    return false;
-  }, true);
-
-  window.addEventListener('keydown', (e) => {
-    // F12 key
-    if (e.key === 'F12' || e.keyCode === 123) {
-      e.preventDefault();
-      e.stopPropagation();
-      toast('🔒 Developer tools inspection is disabled.', true);
-      return false;
-    }
-
-    const isCtrl = e.ctrlKey || e.metaKey;
-
-    // Ctrl+Shift+I, Ctrl+Shift+J, Ctrl+Shift+C
-    if (isCtrl && e.shiftKey && ['I', 'J', 'C', 'i', 'j', 'c'].includes(e.key)) {
-      e.preventDefault();
-      e.stopPropagation();
-      toast('🔒 Inspect Element is disabled.', true);
-      return false;
-    }
-
-    // Ctrl+U (View Page Source), Ctrl+S (Save Page)
-    if (isCtrl && ['u', 'U', 's', 'S'].includes(e.key)) {
-      e.preventDefault();
-      e.stopPropagation();
-      toast('🔒 Viewing page source is disabled.', true);
-      return false;
-    }
-  }, true);
 
   // ── Mobile Virtual Keyboard Auto-Scroll & Viewport Handling ────────────────
   if (window.visualViewport) {

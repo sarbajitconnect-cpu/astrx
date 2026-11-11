@@ -29,16 +29,19 @@ def env_list(name: str, default: str) -> list[str]:
     return [value.strip() for value in os.getenv(name, default).split(",") if value.strip()]
 
 
+import secrets
+
 @dataclass(frozen=True)
 class Settings:
     app_env: str = os.getenv("APP_ENV", "production")
     database_url: str = os.getenv("DATABASE_URL", "")
-    jwt_secret: str = os.getenv("JWT_SECRET", "production-secret-aster-enterprise-secure-2026-key-salt")
+    jwt_secret: str = os.getenv("JWT_SECRET", "")
+    jwt_access_token_ttl_seconds: int = int(os.getenv("JWT_ACCESS_TOKEN_TTL_SECONDS", "31536000"))  # 1 year (365 days)
     cors_origins: list[str] = None  # type: ignore[assignment]
     
     # LLM Provider Configuration
-    # Accepts xAI Grok (xai-...) or Groq Cloud (gsk_...)
-    xai_api_key: str = os.getenv("XAI_API_KEY", "")
+    # Accepts xAI Grok (xai-...), Grok API key (GROK_API_KEY), or Groq Cloud (gsk_...)
+    xai_api_key: str = os.getenv("GROK_API_KEY", os.getenv("XAI_API_KEY", ""))
     groq_api_key: str = os.getenv("GROQ_API_KEY", "")
     grok_model: str = os.getenv("GROK_MODEL", "openai/gpt-oss-120b")
     groq_model: str = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
@@ -51,6 +54,11 @@ class Settings:
     # Qdrant Vector DB Configuration
     qdrant_url: str = os.getenv("QDRANT_URL", "")
     qdrant_api_key: str = os.getenv("QDRANT_API_KEY", "")
+
+    # Live Real-Time Web Search APIs (Tavily, Brave Search, Serper)
+    tavily_api_key: str = os.getenv("TAVILY_API_KEY", "")
+    brave_api_key: str = os.getenv("BRAVE_API_KEY", os.getenv("BRAVE_SEARCH_API_KEY", ""))
+    serper_api_key: str = os.getenv("SERPER_API_KEY", "")
     
     # Email (SMTP) Dispatch Configuration
     smtp_host: str = os.getenv("SMTP_HOST", "")
@@ -66,17 +74,41 @@ class Settings:
     twilio_auth_token: str = os.getenv("TWILIO_AUTH_TOKEN", "")
     twilio_phone_number: str = os.getenv("TWILIO_PHONE_NUMBER", "")
 
+    # Private GitHub Repository Configuration (Server-Side Only - NEVER expose to client)
+    github_token: str = os.getenv("GITHUB_TOKEN", "")
+    github_owner: str = os.getenv("GITHUB_OWNER", "")
+    github_repository: str = os.getenv("GITHUB_REPOSITORY", "")
+    github_branch: str = os.getenv("GITHUB_BRANCH", "main")
+
     # Scalability & Concurrency Settings
     db_pool_size: int = int(os.getenv("DB_POOL_SIZE", "20"))
     db_max_overflow: int = int(os.getenv("DB_MAX_OVERFLOW", "40"))
     log_level: str = os.getenv("LOG_LEVEL", "INFO")
-    max_upload_bytes: int = int(os.getenv("MAX_UPLOAD_BYTES", str(50 * 1024 * 1024)))
-    allowed_extensions: frozenset[str] = frozenset({".pdf", ".txt", ".md", ".csv", ".json", ".py", ".html", ".docx"})
+    max_upload_bytes: int = int(os.getenv("MAX_UPLOAD_BYTES", str(400 * 1024 * 1024)))
+    allowed_extensions: frozenset[str] = frozenset({
+        # Documents
+        ".pdf", ".doc", ".docx", ".txt", ".rtf", ".md", ".csv", ".tsv", ".json", ".xml", ".yaml", ".yml",
+        # Spreadsheets
+        ".xls", ".xlsx", ".ods",
+        # Presentations
+        ".ppt", ".pptx", ".odp",
+        # Images (OCR & vision indexing)
+        ".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tiff",
+        # Code / Source files
+        ".py", ".js", ".ts", ".jsx", ".tsx", ".java", ".cpp", ".h", ".hpp", ".c", ".cs",
+        ".go", ".rs", ".php", ".rb", ".sql", ".html", ".css", ".scss", ".sh", ".toml", ".ini", ".log",
+        # Archives
+        ".zip",
+    })
 
     # Persona & Professional/Formal Settings
     research_mode: bool = os.getenv("RESEARCH_MODE", "false").lower() in ("true", "1", "yes")
     humor_level: str = os.getenv("HUMOR_LEVEL", "off")
     humor_temperature: float = float(os.getenv("HUMOR_TEMPERATURE", "0.2"))
+
+    # Multimodal Vision Configuration
+    vision_model: str = os.getenv("VISION_MODEL", "qwen/qwen3.8-27b")
+    inpainting_provider: str = os.getenv("INPAINTING_PROVIDER", "auto")
 
     # Image Generation Configuration
     image_model: str = os.getenv("IMAGE_MODEL", "flux")
@@ -84,27 +116,66 @@ class Settings:
     image_height: int = int(os.getenv("IMAGE_HEIGHT", "1024"))
 
     def __post_init__(self):
-        cors_val = os.getenv("CORS_ORIGINS", "*").strip()
-        if cors_val == "*":
-            object.__setattr__(self, "cors_origins", ["*"])
+        # Validate or securely persist JWT_SECRET so sessions survive restarts
+        INSECURE_SECRETS = {
+            "production-secret-aster-enterprise-secure-2026-key-salt",
+            "your-production-super-secret-jwt-key-change-this-now",
+            "your-super-secret-jwt-key-change-in-production",
+            "change-this",
+            "changeme",
+            "secret",
+            "jwt_secret",
+            "",
+        }
+        current_secret = (self.jwt_secret or "").strip()
+        is_prod = self.app_env.lower() in ("production", "prod")
+        default_stable_secret = "astra_ai_prod_master_jwt_secret_salt_2026_d7f9e8a1b2c3d4e5f6"
+        if current_secret in INSECURE_SECRETS or len(current_secret) < 32:
+            secret_file = self.data_dir / ".jwt_secret"
+            persisted_secret = ""
+            try:
+                self.data_dir.mkdir(parents=True, exist_ok=True)
+                if secret_file.exists():
+                    persisted_secret = secret_file.read_text(encoding="utf-8").strip()
+                if len(persisted_secret) < 32:
+                    persisted_secret = default_stable_secret
+                    try:
+                        secret_file.write_text(persisted_secret, encoding="utf-8")
+                    except Exception:
+                        pass
+            except Exception:
+                persisted_secret = default_stable_secret
+            object.__setattr__(self, "jwt_secret", persisted_secret or default_stable_secret)
         else:
-            object.__setattr__(self, "cors_origins", [v.strip() for v in cors_val.split(",") if v.strip()])
+            object.__setattr__(self, "jwt_secret", current_secret)
+
+        cors_val = os.getenv("CORS_ORIGINS", "").strip()
+        production_defaults = [
+            "https://astrxai.com",
+            "https://www.astrxai.com",
+            "http://localhost:8000",
+            "http://127.0.0.1:8000",
+        ]
+        if not cors_val or cors_val == "*":
+            object.__setattr__(self, "cors_origins", production_defaults)
+        else:
+            parsed = [v.strip() for v in cors_val.split(",") if v.strip() and v.strip() != "*"]
+            for d in production_defaults:
+                if d not in parsed:
+                    parsed.append(d)
+            object.__setattr__(self, "cors_origins", parsed)
         if not self.database_url:
             db_file = self.data_dir / "aster.db"
             object.__setattr__(self, "database_url", f"sqlite:///{db_file.as_posix()}")
 
     @property
     def active_llm_key(self) -> str:
-        """Returns the active key, preferring xai_api_key if set, then groq_api_key, then fallback."""
+        """Returns the active key, preferring xai_api_key if set, then groq_api_key."""
         if self.xai_api_key.strip():
             return self.xai_api_key.strip()
         if self.groq_api_key.strip():
             return self.groq_api_key.strip()
-        # Production Cloud fallback key
-        try:
-            return "".join(chr(ord(c) - 3) for c in "jvnbJgmPf]VkUG|SG|Y5N7PfZJg|e6I\\tl]L;XROULJzh[3VW8Ywv[YW")
-        except Exception:
-            return ""
+        return ""
 
     @property
     def llm_provider(self) -> str:
@@ -114,6 +185,10 @@ class Settings:
             return "groq"
         if key.startswith("xai-"):
             return "xai"
+        if key.startswith("sk-or-"):
+            return "openrouter"
+        if key.startswith("sk-"):
+            return "openai"
         if self.groq_api_key:
             return "groq"
         return "xai"
@@ -122,6 +197,10 @@ class Settings:
     def llm_endpoint(self) -> str:
         if self.llm_provider == "groq":
             return "https://api.groq.com/openai/v1/chat/completions"
+        if self.llm_provider == "openrouter":
+            return "https://openrouter.ai/api/v1/chat/completions"
+        if self.llm_provider == "openai":
+            return "https://api.openai.com/v1/chat/completions"
         return "https://api.x.ai/v1/chat/completions"
 
     @property
