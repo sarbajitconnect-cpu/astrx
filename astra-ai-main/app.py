@@ -220,12 +220,22 @@ async def rate_limit_middleware(request: Request, call_next):
 @app.middleware("http")
 async def security_headers_middleware(request: Request, call_next):
     response = await call_next(request)
+    response.headers["Server"] = "Astra-Core"
+    response.headers["X-Powered-By"] = "Astra Engine"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "SAMEORIGIN"
     response.headers["X-XSS-Protection"] = "1; mode=block"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["Permissions-Policy"] = "geolocation=(), microphone=(self), camera=(self)"
     response.headers["Access-Control-Expose-Headers"] = "X-Guest-Token"
+    req_host = (request.headers.get("host") or request.url.netloc or "").split(":")[0].lower()
+    is_dev_host = (
+        req_host.startswith("dev.")
+        or req_host.startswith("staging.")
+        or req_host.endswith(".onrender.com")
+    )
+    if is_dev_host:
+        response.headers["X-Robots-Tag"] = "noindex, nofollow, noarchive, nosnippet"
     if settings.app_env.lower() in ("production", "prod"):
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains; preload"
     if request.url.path.startswith("/preview/"):
@@ -465,7 +475,15 @@ def app_view() -> FileResponse:
 
 
 @app.get("/robots.txt", response_class=PlainTextResponse)
-def robots_txt() -> PlainTextResponse:
+def robots_txt(request: Request) -> PlainTextResponse:
+    req_host = (request.headers.get("host") or request.url.netloc or "").split(":")[0].lower()
+    is_dev_host = (
+        req_host.startswith("dev.")
+        or req_host.startswith("staging.")
+        or req_host.endswith(".onrender.com")
+    )
+    if is_dev_host:
+        return PlainTextResponse("User-agent: *\nDisallow: /\n", media_type="text/plain")
     content = (
         "User-agent: *\n"
         "Allow: /\n"

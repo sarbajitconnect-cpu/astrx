@@ -37,6 +37,14 @@
       <!-- Collapsed Sidebar Glass Rail (100% Matching Mockup) -->
       <nav id="sidebarRail" class="sidebar-rail hidden" aria-label="Collapsed sidebar">
         <div class="rail-top-group">
+          <!-- Top Button: Homepage Link -->
+          <a href="/" class="rail-icon-btn" title="Back to Astra Homepage" style="text-decoration: none; color: inherit; display: flex; align-items: center; justify-content: center;">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+              <polyline points="9 22 9 12 15 12 15 22"></polyline>
+            </svg>
+          </a>
+
           <!-- Top Button: Expand Sidebar -->
           <button type="button" id="railExpandBtn" class="rail-icon-btn" title="Open Sidebar" aria-label="Open sidebar">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -74,7 +82,7 @@
             </svg>
           </button>
 
-          <span class="sidebar-brand-title">ASTRA</span>
+          <a href="/" class="sidebar-brand-title" style="text-decoration: none; color: inherit; cursor: pointer;" title="Back to Astra Homepage">ASTRA</a>
 
           <button type="button" id="closeSidebar" class="icon-pill-btn" title="Toggle Sidebar" aria-label="Toggle sidebar">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -165,7 +173,7 @@
             </svg>
           </button>
           <div class="mobile-nav-center">
-            <span class="mobile-nav-brand">ASTRA</span>
+            <a href="/" class="mobile-nav-brand" style="text-decoration: none; color: inherit; cursor: pointer;" title="Back to Astra Homepage">ASTRA</a>
           </div>
           <div class="mobile-nav-right">
             <button type="button" id="mobileNewChatBtn" class="mobile-nav-icon-btn" title="New Conversation" aria-label="New conversation">
