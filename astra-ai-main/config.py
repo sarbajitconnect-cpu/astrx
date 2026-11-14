@@ -165,8 +165,12 @@ class Settings:
                     parsed.append(d)
             object.__setattr__(self, "cors_origins", parsed)
         if not self.database_url:
-            db_file = self.data_dir / "aster.db"
+            db_file = (self.data_dir / "aster.db").resolve()
             object.__setattr__(self, "database_url", f"sqlite:///{db_file.as_posix()}")
+        elif self.database_url.startswith("sqlite:///./") or self.database_url.startswith("sqlite:///data/"):
+            rel_part = self.database_url.replace("sqlite:///./", "").replace("sqlite:///", "")
+            resolved_db = (APP_DIR / rel_part).resolve()
+            object.__setattr__(self, "database_url", f"sqlite:///{resolved_db.as_posix()}")
 
     @property
     def active_llm_key(self) -> str:

@@ -2157,6 +2157,25 @@ img, video, canvas, svg {
   box-sizing: border-box;
 }
 
+.auth-legal-note {
+  margin: 14px 0 6px;
+  font-size: 12px;
+  color: #94a3b8;
+  text-align: center;
+  line-height: 1.5;
+}
+
+.auth-legal-note a {
+  color: #f472b6;
+  text-decoration: underline;
+  font-weight: 500;
+  transition: color 0.15s ease;
+}
+
+.auth-legal-note a:hover {
+  color: #f9a8d4;
+}
+
 .math-challenge-box {
   background: rgba(145, 175, 195, 0.2);
   border: 1px solid rgba(145, 175, 195, 0.4);
@@ -2750,7 +2769,26 @@ img, video, canvas, svg {
     margin-top: 3px !important;
   }
 
-  .math-challenge-box {
+  .auth-legal-note {
+  margin: 14px 0 6px;
+  font-size: 12px;
+  color: #94a3b8;
+  text-align: center;
+  line-height: 1.5;
+}
+
+.auth-legal-note a {
+  color: #f472b6;
+  text-decoration: underline;
+  font-weight: 500;
+  transition: color 0.15s ease;
+}
+
+.auth-legal-note a:hover {
+  color: #f9a8d4;
+}
+
+.math-challenge-box {
     padding: 10px 12px !important;
     margin: 8px 0 12px !important;
     border-radius: 12px !important;

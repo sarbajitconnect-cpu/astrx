@@ -45,6 +45,10 @@ from auth import (
     clear_failed_attempts,
     clear_session_cookie,
     create_access_token,
+    create_user_session,
+    revoke_device_session,
+    revoke_all_user_sessions,
+    _resolve_authenticated_user,
     get_current_user,
     get_optional_user,
     hash_password,
@@ -56,7 +60,7 @@ from auth import (
     verify_password,
 )
 from config import BUNDLE_DIR, settings
-from database import Conversation, DailyUsage, Document, QueryEvent, User, UserPreference, get_db, initialize_database
+from database import Conversation, DailyUsage, Document, QueryEvent, User, UserPreference, UserSession, get_db, initialize_database
 from github_service import github_service
 from rag_engine import ProductionRAGService, is_chemistry_query
 
@@ -275,9 +279,10 @@ class RegisterPayload(BaseModel):
     phone: str | None = Field(default="", max_length=30)
     password: str = Field(min_length=8, max_length=128)
     password_confirm: str | None = Field(default=None, max_length=128)
-    challenge_token: str = Field(min_length=1)
-    calculation_result: int
-    agreed_to_terms: bool = False
+    challenge_token: str | None = Field(default=None)
+    calculation_result: int | None = Field(default=None)
+    agreed_to_terms: bool = True
+    device_id: str | None = Field(default=None)
 
 
 class LoginPayload(BaseModel):
@@ -285,14 +290,15 @@ class LoginPayload(BaseModel):
     phone: str | None = Field(default=None, max_length=30)
     email: str | None = Field(default=None, max_length=255)
     password: str = Field(min_length=1, max_length=128)
-    challenge_token: str = Field(min_length=1)
-    calculation_result: int
+    challenge_token: str | None = Field(default=None)
+    calculation_result: int | None = Field(default=None)
+    device_id: str | None = Field(default=None)
 
 
 class ForgotPasswordPayload(BaseModel):
     identifier: str = Field(min_length=1, max_length=255)
-    challenge_token: str = Field(min_length=1)
-    calculation_result: int
+    challenge_token: str | None = Field(default=None)
+    calculation_result: int | None = Field(default=None)
 
 
 class ResetPasswordPayload(BaseModel):
@@ -333,10 +339,47 @@ def token_payload(user: User) -> dict:
     }
 
 
-def auth_success_response(user: User, request: Request | None = None) -> JSONResponse:
-    body = token_payload(user)
-    response = JSONResponse(content=body)
-    set_session_cookie(response, body["access_token"], request=request)
+def auth_success_response(
+    user: User,
+    db: Session,
+    request: Request | None = None,
+    device_id: str | None = None,
+    status_code: int = 200,
+) -> JSONResponse:
+    dev_id = (device_id or "").strip()
+    if not dev_id and request is not None:
+        dev_id = (request.headers.get("X-Device-Id") or request.headers.get("x-device-id") or "").strip()
+    if not dev_id:
+        dev_id = f"dev_{uuid.uuid4().hex[:16]}"
+
+    client_ip = request.client.host if request and request.client else None
+    user_agent = request.headers.get("user-agent") if request else None
+
+    raw_session_token, session_rec = create_user_session(
+        user=user,
+        db=db,
+        device_id=dev_id,
+        ip_address=client_ip,
+        user_agent=user_agent,
+    )
+
+    access_token = create_access_token(user.id, user.role, getattr(user, "token_version", 1))
+    displayName = user.username or (user.email.split("@")[0] if user.email else "User")
+    body = {
+        "access_token": access_token,
+        "session_token": raw_session_token,
+        "device_id": dev_id,
+        "token_type": "bearer",
+        "user": {
+            "id": user.id,
+            "email": user.email,
+            "username": displayName,
+            "phone": user.phone or "",
+            "role": user.role,
+        },
+    }
+    response = JSONResponse(content=body, status_code=status_code)
+    set_session_cookie(response, raw_session_token, request=request)
     return response
 
 
@@ -637,20 +680,6 @@ def get_calculation_challenge() -> dict:
 
 @app.post("/api/auth/register", status_code=status.HTTP_201_CREATED)
 def register_user(request: Request, payload: RegisterPayload, db: Session = Depends(get_db)) -> JSONResponse:
-    # 1. Verify terms & conditions agreement
-    if not payload.agreed_to_terms:
-        raise HTTPException(
-            status_code=400,
-            detail="You must agree to the Terms & Conditions and Privacy Policy to register."
-        )
-
-    # 2. Verify calculation result
-    if not verify_math_challenge(payload.challenge_token, payload.calculation_result):
-        raise HTTPException(
-            status_code=400,
-            detail="Incorrect calculation result! Please solve the math problem correctly to register."
-        )
-
     if payload.password_confirm is not None and payload.password != payload.password_confirm:
         raise HTTPException(status_code=400, detail="Passwords do not match.")
 
@@ -659,10 +688,15 @@ def register_user(request: Request, payload: RegisterPayload, db: Session = Depe
     if strength_err:
         raise HTTPException(status_code=400, detail=strength_err)
 
-    email = payload.email.strip().lower()
-    username = payload.username.strip()
-    raw_phone = (payload.phone or "").strip()
+    email = re.sub(r"[\u200b\u200e\u200f]", "", payload.email).strip().lower()
+    username = re.sub(r"[\u200b\u200e\u200f]", "", payload.username).strip()
+    raw_phone = re.sub(r"[\u200b\u200e\u200f]", "", (payload.phone or "")).strip()
     phone = normalize_phone(raw_phone) if raw_phone else ""
+
+    if not email:
+        raise HTTPException(status_code=400, detail="Email is required.")
+    if not username:
+        raise HTTPException(status_code=400, detail="Username is required.")
 
     # Validate phone length if provided
     if raw_phone:
@@ -685,9 +719,13 @@ def register_user(request: Request, payload: RegisterPayload, db: Session = Depe
                 detail="An account with this phone number already exists. Please log in."
             )
 
-    # Check existing account by email or username
-    existing = db.scalar(select(User).where((User.email == email) | (User.username == username)))
-    if existing and existing.password_hash:
+    # Check existing account by email or username (case-insensitive)
+    existing = db.scalar(
+        select(User).where(
+            (func.lower(User.email) == email) | (func.lower(User.username) == username.lower())
+        )
+    )
+    if existing and existing.password_hash and existing.role != "guest":
         raise HTTPException(status_code=400, detail="An account with this email or username already exists. Please log in.")
 
     if existing:
@@ -697,7 +735,6 @@ def register_user(request: Request, payload: RegisterPayload, db: Session = Depe
         user.phone = phone
         user.password_hash = hash_password(payload.password)
         user.role = "user"
-        user.token_version = (user.token_version or 1) + 1
     else:
         user = User(
             email=email,
@@ -713,32 +750,30 @@ def register_user(request: Request, payload: RegisterPayload, db: Session = Depe
     db.refresh(user)
 
     logger.info("user_registered id=%s", user.id)
-    return token_response(user, request=request)
+    return auth_success_response(user, db, request=request, device_id=payload.device_id, status_code=status.HTTP_201_CREATED)
 
 
 @app.post("/api/auth/login")
 def login_user(request: Request, payload: LoginPayload, db: Session = Depends(get_db)) -> JSONResponse:
-    ident = (payload.identifier or payload.email or payload.phone or "").strip()
+    raw_ident = (payload.identifier or payload.email or payload.phone or "")
+    ident = re.sub(r"[\u200b\u200e\u200f]", "", raw_ident).strip()
     if not ident:
         raise HTTPException(status_code=400, detail="Please enter your phone number, email, or username.")
+
+    password = payload.password or ""
+    if not password:
+        raise HTTPException(status_code=400, detail="Please enter your password.")
 
     client_ip = request.client.host if request.client else "unknown"
     rate_key = f"{client_ip}:{ident.lower()}"
 
-    # Lockout check
+    # Lockout check with automatic backoff
     remaining_lock = check_is_locked(rate_key)
     if remaining_lock > 0:
         minutes = (remaining_lock // 60) + 1
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=f"Account temporarily locked due to too many failed attempts. Please try again in {minutes} minutes."
-        )
-
-    # 1. Calculation verification
-    if not verify_math_challenge(payload.challenge_token, payload.calculation_result):
-        raise HTTPException(
-            status_code=400,
-            detail="Incorrect calculation result! Please solve the math problem correctly to log in."
         )
 
     user = None
@@ -752,8 +787,8 @@ def login_user(request: Request, payload: LoginPayload, db: Session = Depends(ge
             select(User)
             .where(
                 User.role != "guest",
-                User.phone.isnot(None),
-                User.phone != "",
+                User.password_hash.isnot(None),
+                User.password_hash != "",
                 (User.phone == norm_phone) | (User.phone == ident) | (User.phone.like(f"%{last_10}"))
             )
             .order_by(User.created_at.desc())
@@ -763,8 +798,10 @@ def login_user(request: Request, payload: LoginPayload, db: Session = Depends(ge
             candidates = db.scalars(
                 select(User).where(
                     User.role != "guest",
+                    User.password_hash.isnot(None),
+                    User.password_hash != "",
                     User.phone.isnot(None),
-                    User.phone != ""
+                    User.phone != "",
                 )
             ).all()
             for cand in candidates:
@@ -780,6 +817,8 @@ def login_user(request: Request, payload: LoginPayload, db: Session = Depends(ge
             select(User)
             .where(
                 User.role != "guest",
+                User.password_hash.isnot(None),
+                User.password_hash != "",
                 (func.lower(User.email) == search_val) | (func.lower(User.username) == search_val)
             )
             .order_by(User.created_at.desc())
@@ -794,6 +833,8 @@ def login_user(request: Request, payload: LoginPayload, db: Session = Depends(ge
                 select(User)
                 .where(
                     User.role != "guest",
+                    User.password_hash.isnot(None),
+                    User.password_hash != "",
                     User.phone.isnot(None),
                     User.phone != "",
                     (User.phone == p_norm) | (User.phone == payload.phone) | (User.phone.like(f"%{p_clean[-10:]}"))
@@ -806,28 +847,36 @@ def login_user(request: Request, payload: LoginPayload, db: Session = Depends(ge
         if lock_secs > 0:
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="Account temporarily locked due to too many failed attempts. Please try again in 10 minutes."
+                detail="Account temporarily locked due to too many failed attempts. Please try again in 1 minute."
             )
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials.")
 
-    if not verify_password(payload.password, user.password_hash):
+    # Check password: try raw password and whitespace-trimmed password for mobile keyboard tolerance
+    valid = verify_password(password, user.password_hash)
+    if not valid and password.strip() != password:
+        valid = verify_password(password.strip(), user.password_hash)
+
+    if not valid:
         rem, lock_secs = record_failed_attempt(rate_key)
         if lock_secs > 0:
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="Account temporarily locked due to too many failed attempts. Please try again in 10 minutes."
+                detail="Account temporarily locked due to too many failed attempts. Please try again in 1 minute."
             )
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials.")
 
     # Upgrade password hash to Argon2id if needed
     if needs_rehash(user.password_hash):
-        user.password_hash = hash_password(payload.password)
-        db.commit()
+        try:
+            user.password_hash = hash_password(password)
+            db.commit()
+        except Exception:
+            pass
 
     clear_failed_attempts(rate_key)
 
     logger.info("user_login_success id=%s", user.id)
-    return token_response(user, request=request)
+    return auth_success_response(user, db, request=request, device_id=payload.device_id)
 
 
 @app.post("/api/auth/forgot-password")
@@ -945,13 +994,31 @@ def logout_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
     astra_session: str | None = Cookie(default=None, alias="astra_session"),
 ) -> JSONResponse:
-    from auth import _resolve_authenticated_user
     user = _resolve_authenticated_user(credentials, astra_session, db, request=request)
     if user:
-        revoke_user_sessions(user, db)
-        logger.info("user_logged_out_sessions_revoked user_id=%s", user.id)
+        sess_token = request.headers.get("X-Session-Token") or request.headers.get("x-session-token") or astra_session
+        dev_id = request.headers.get("X-Device-Id") or request.headers.get("x-device-id")
+        revoke_device_session(user, db, session_token=sess_token, device_id=dev_id)
+        logger.info("user_device_session_revoked user_id=%s device_id=%s", user.id, dev_id)
 
-    response = JSONResponse(content={"success": True, "message": "Logged out successfully."})
+    response = JSONResponse(content={"success": True, "message": "Logged out successfully from this device."})
+    clear_session_cookie(response, request=request)
+    return response
+
+
+@app.post("/api/auth/logout-all")
+def logout_all_devices(
+    request: Request,
+    db: Session = Depends(get_db),
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
+    astra_session: str | None = Cookie(default=None, alias="astra_session"),
+) -> JSONResponse:
+    user = _resolve_authenticated_user(credentials, astra_session, db, request=request)
+    if user:
+        revoke_all_user_sessions(user, db)
+        logger.info("user_all_sessions_revoked user_id=%s", user.id)
+
+    response = JSONResponse(content={"success": True, "message": "Logged out successfully from all devices."})
     clear_session_cookie(response, request=request)
     return response
 
@@ -960,14 +1027,32 @@ def logout_user(
 def me(
     request: Request,
     response: Response,
-    user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
+    astra_session: str | None = Cookie(default=None, alias="astra_session"),
 ) -> dict:
+    user = _resolve_authenticated_user(credentials, astra_session, db, request=request)
+    if not user or user.role == "guest":
+        raise HTTPException(401, "Sign in is required")
+
     displayName = user.username or user.email.split("@")[0]
     client_ip = request.client.host if request.client else "unknown"
     tokens = get_user_token_status(user, client_ip, db)
-    refreshed_token = create_access_token(user.id, user.role, getattr(user, "token_version", 1))
-    set_session_cookie(response, refreshed_token, request=request)
+    refreshed_access_token = create_access_token(user.id, user.role, getattr(user, "token_version", 1))
+
+    sess_hdr = request.headers.get("X-Session-Token") or request.headers.get("x-session-token") or astra_session
+    dev_id = request.headers.get("X-Device-Id") or request.headers.get("x-device-id")
+    raw_session_token = sess_hdr
+    if not raw_session_token:
+        raw_session_token, _ = create_user_session(
+            user=user,
+            db=db,
+            device_id=dev_id,
+            ip_address=client_ip,
+            user_agent=request.headers.get("user-agent"),
+        )
+
+    set_session_cookie(response, raw_session_token, request=request)
     return {
         "id": user.id,
         "email": user.email,
@@ -975,7 +1060,9 @@ def me(
         "phone": user.phone or "",
         "role": user.role,
         "tokens": tokens,
-        "access_token": refreshed_token,
+        "access_token": refreshed_access_token,
+        "session_token": raw_session_token,
+        "device_id": dev_id or "",
     }
 
 
@@ -983,16 +1070,33 @@ def me(
 def refresh_session(
     request: Request,
     response: Response,
-    user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
+    astra_session: str | None = Cookie(default=None, alias="astra_session"),
 ) -> dict:
+    user = _resolve_authenticated_user(credentials, astra_session, db, request=request)
+    if not user or user.role == "guest":
+        raise HTTPException(401, "Sign in is required or session expired")
+
     displayName = user.username or user.email.split("@")[0]
     client_ip = request.client.host if request.client else "unknown"
     tokens = get_user_token_status(user, client_ip, db)
-    refreshed_token = create_access_token(user.id, user.role, getattr(user, "token_version", 1))
-    set_session_cookie(response, refreshed_token, request=request)
+
+    dev_id = request.headers.get("X-Device-Id") or request.headers.get("x-device-id")
+    raw_session_token, _ = create_user_session(
+        user=user,
+        db=db,
+        device_id=dev_id,
+        ip_address=client_ip,
+        user_agent=request.headers.get("user-agent"),
+    )
+    refreshed_access_token = create_access_token(user.id, user.role, getattr(user, "token_version", 1))
+    set_session_cookie(response, raw_session_token, request=request)
+
     return {
-        "access_token": refreshed_token,
+        "access_token": refreshed_access_token,
+        "session_token": raw_session_token,
+        "device_id": dev_id or "",
         "token_type": "bearer",
         "user": {
             "id": user.id,

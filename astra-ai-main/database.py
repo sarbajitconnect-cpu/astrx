@@ -166,6 +166,36 @@ class DailyUsage(Base):
         }
 
 
+class UserSession(Base):
+    __tablename__ = "user_sessions"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    device_id: Mapped[str] = mapped_column(String(128), index=True)
+    session_token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    device_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    ip_address: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    user_agent: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    is_active: Mapped[int] = mapped_column(Integer, default=1, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
+    last_active_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+    __table_args__ = (
+        Index("ix_user_sessions_user_device", "user_id", "device_id"),
+        Index("ix_user_sessions_lookup", "session_token_hash", "is_active", "expires_at"),
+    )
+
+    def public(self) -> dict:
+        return {
+            "id": self.id,
+            "device_id": self.device_id,
+            "device_name": self.device_name or "Active Device",
+            "last_active_at": self.last_active_at.isoformat() if self.last_active_at else "",
+            "created_at": self.created_at.isoformat() if self.created_at else "",
+            "is_active": bool(self.is_active),
+        }
+
+
 def initialize_database() -> None:
     Base.metadata.create_all(bind=engine)
     # Ensure any missing columns from older SQLite database versions are gracefully migrated

@@ -1,13 +1,9 @@
 (() => {
   const $ = (id) => document.getElementById(id);
-  // Security hardening: never store long-lived bearer tokens in localStorage.
-  // Purge any legacy tokens from previous versions immediately.
-  try {
-    localStorage.removeItem('aster_token');
-    localStorage.removeItem('astra_guest_token');
-  } catch (_) {}
 
-  let token = '';
+  // Permanent Device Authentication State
+  let token = localStorage.getItem('astra_access_token') || localStorage.getItem('aster_token') || '';
+  let sessionToken = localStorage.getItem('astra_session_token') || '';
   let cachedUsername = localStorage.getItem('aster_username') || '';
   let user = null;
   try {
@@ -45,8 +41,13 @@
     const headers = { ...(options.headers || {}) };
     if (token) {
       headers.Authorization = `Bearer ${token}`;
+    } else if (sessionToken) {
+      headers.Authorization = `Bearer ${sessionToken}`;
     } else if (!isAuthenticated && guestToken) {
       headers['X-Guest-Token'] = guestToken;
+    }
+    if (sessionToken) {
+      headers['X-Session-Token'] = sessionToken;
     }
     headers['X-Device-Id'] = deviceId;
 
@@ -60,6 +61,35 @@
         : 'Astra is temporarily unavailable. Please try again.';
       toast(msg, true);
       throw new Error(msg);
+    }
+
+    // Silent session renewal on 401 using the device session token
+    if (response.status === 401 && sessionToken && !path.includes('/api/auth/login') && !path.includes('/api/auth/refresh') && !path.includes('/api/auth/register')) {
+      try {
+        const refreshRes = await fetch(`${getApiBase()}/api/auth/refresh`, {
+          method: 'POST',
+          credentials: 'include',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Session-Token': sessionToken,
+            'X-Device-Id': deviceId,
+            'Authorization': `Bearer ${sessionToken}`,
+          },
+        });
+        if (refreshRes.ok) {
+          const refreshData = await refreshRes.json();
+          if (refreshData && refreshData.access_token) {
+            token = refreshData.access_token;
+            sessionToken = refreshData.session_token || sessionToken;
+            localStorage.setItem('astra_access_token', token);
+            localStorage.setItem('astra_session_token', sessionToken);
+            // Retry the original request once
+            headers.Authorization = `Bearer ${token}`;
+            headers['X-Session-Token'] = sessionToken;
+            response = await fetch(fullUrl, { credentials: 'include', ...options, headers });
+          }
+        }
+      } catch (_) {}
     }
 
     const serverGuestToken = response.headers && response.headers.get('X-Guest-Token');
@@ -2987,14 +3017,12 @@
     };
   }
 
-  // Handle Math Calculation Login (Requires BOTH math challenge and password)
+  // Handle Login (Direct credential authentication with 1-year persistent session)
   if ($('loginForm')) {
     $('loginForm').onsubmit = async (e) => {
       e.preventDefault();
       const identifier = $('loginIdentifier') ? $('loginIdentifier').value.trim() : '';
       const password = $('loginPassword') ? $('loginPassword').value : '';
-      const ansVal = $('loginMathAnswer') ? $('loginMathAnswer').value.trim() : '';
-      const calculation_result = parseInt(ansVal, 10);
 
       if (!identifier) {
         toast('Please enter your phone number, email, or username', true);
@@ -3004,23 +3032,13 @@
         toast('Please enter your password', true);
         return;
       }
-      if (isNaN(calculation_result)) {
-        toast('Please calculate and enter the answer to the math problem', true);
-        return;
-      }
-      if (!currentLoginChallenge) {
-        toast('Calculation expired, refreshing…', true);
-        await loadMathChallenge('login');
-        return;
-      }
 
       try {
-        toast('Verifying calculation & logging in…');
+        toast('Signing in…');
         const payload = {
           identifier,
           password,
-          challenge_token: currentLoginChallenge.challenge_token,
-          calculation_result,
+          device_id: deviceId,
         };
 
         const result = await api('/api/auth/login', {
@@ -3028,15 +3046,16 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
         });
-        // Session is persisted via 1-year HttpOnly cookie (`astra_session`).
-        // Keep in-memory bearer token active during the active session.
+
         token = result.access_token || '';
+        sessionToken = result.session_token || '';
         isAuthenticated = true;
         user = result.user;
         cachedUsername = (user && user.username) || identifier;
         guestToken = '';
         localStorage.removeItem('astra_guest_token');
-        localStorage.removeItem('aster_token');
+        if (token) localStorage.setItem('astra_access_token', token);
+        if (sessionToken) localStorage.setItem('astra_session_token', sessionToken);
         localStorage.setItem('aster_username', cachedUsername);
         if (user) {
           localStorage.setItem('aster_user', JSON.stringify({
@@ -3055,29 +3074,22 @@
         fetchTokenStatus();
       } catch (err) {
         toast(err.message, true);
-        loadMathChallenge('login');
       }
     };
   }
 
 
-  // Handle Math Calculation Registration
+  // Handle Registration (Immediate creation and instant login)
   if ($('signupForm')) {
     $('signupForm').onsubmit = async (e) => {
       e.preventDefault();
-      const username = $('signupUsername').value.trim();
-      const email = $('signupEmail').value.trim();
+      const username = $('signupUsername') ? $('signupUsername').value.trim() : '';
+      const email = $('signupEmail') ? $('signupEmail').value.trim() : '';
       const phone = $('signupPhone') ? $('signupPhone').value.trim() : '';
-      const password = $('signupPassword').value;
-      const calculation_result = parseInt($('signupMathAnswer').value.trim(), 10);
-      const termsConsent = $('signupTermsConsent') ? $('signupTermsConsent').checked : false;
+      const password = $('signupPassword') ? $('signupPassword').value : '';
 
       if (!username || !email || !password) {
         toast('Please fill in username, email, and password', true);
-        return;
-      }
-      if (!termsConsent) {
-        toast('Please agree to the Terms & Conditions and Privacy Policy to create an account.', true);
         return;
       }
       if (phone) {
@@ -3087,18 +3099,9 @@
           return;
         }
       }
-      if (isNaN(calculation_result)) {
-        toast('Please calculate and enter the answer to the math problem', true);
-        return;
-      }
-      if (!currentSignupChallenge) {
-        toast('Calculation expired, refreshing…', true);
-        await loadMathChallenge('signup');
-        return;
-      }
 
       try {
-        toast('Verifying calculation & creating account…');
+        toast('Creating your account…');
         const result = await api('/api/auth/register', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -3107,20 +3110,20 @@
             email,
             phone,
             password,
-            challenge_token: currentSignupChallenge.challenge_token,
-            calculation_result,
             agreed_to_terms: true,
+            device_id: deviceId,
           }),
         });
-        // Session is persisted via 1-year HttpOnly cookie (`astra_session`).
-        // Keep in-memory bearer token active during the active session.
+
         token = result.access_token || '';
+        sessionToken = result.session_token || '';
         isAuthenticated = true;
         user = result.user;
         cachedUsername = (user && user.username) || username;
         guestToken = '';
         localStorage.removeItem('astra_guest_token');
-        localStorage.removeItem('aster_token');
+        if (token) localStorage.setItem('astra_access_token', token);
+        if (sessionToken) localStorage.setItem('astra_session_token', sessionToken);
         localStorage.setItem('aster_username', cachedUsername);
         if (user) {
           localStorage.setItem('aster_user', JSON.stringify({
@@ -3139,7 +3142,6 @@
         fetchTokenStatus();
       } catch (err) {
         toast(err.message, true);
-        loadMathChallenge('signup');
       }
     };
   }
@@ -4171,9 +4173,6 @@
         switchAuthMode('login');
       }
       $('authModal').classList.remove('hidden');
-      if (!isAuthenticated) {
-        loadMathChallenge(authMode);
-      }
     };
   }
   if ($('closeAuthModal')) {
@@ -4198,19 +4197,24 @@
 
   if ($('logoutBtn')) {
     $('logoutBtn').onclick = async () => {
-      // 1. Notify server to invalidate session & clear persistent cookies
+      // 1. Notify server to invalidate session on THIS device & clear cookies
       try {
         await api('/api/auth/logout', { method: 'POST' });
       } catch (_) {}
 
-      // 2. Clear client credentials and local storage completely
+      // 2. Clear client credentials and local storage for this device
       token = '';
+      sessionToken = '';
       isAuthenticated = false;
       user = null;
       cachedUsername = '';
       currentConversationId = '';
       activeChatHistory = [];
-      localStorage.clear();
+      localStorage.removeItem('astra_access_token');
+      localStorage.removeItem('astra_session_token');
+      localStorage.removeItem('aster_token');
+      localStorage.removeItem('aster_username');
+      localStorage.removeItem('aster_user');
 
       // Reset device ID and guest token to ensure complete isolation for the new session
       deviceId = 'dev_' + (window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID() : (Math.random().toString(36).substring(2) + Date.now().toString(36)));
@@ -4352,13 +4356,26 @@
 
   // Restore persistent session on startup BEFORE displaying login UI or loading user data
   async function restoreSessionOnStartup() {
+    // If user has no credentials or cached profile exist at all, initialize clean guest
+    if (!token && !sessionToken && !localStorage.getItem('aster_user')) {
+      authInitialized = true;
+      ensureLoginFormEmpty();
+      updateAuthUI();
+      fetchTokenStatus();
+      await Promise.all([refreshDocuments(), refreshConversations(true)]);
+      return;
+    }
+
     try {
       const data = await api('/api/auth/me');
       if (data && data.id && data.role !== 'guest') {
         isAuthenticated = true;
-        token = data.access_token || '';
+        token = data.access_token || token;
+        sessionToken = data.session_token || sessionToken;
         user = data;
         cachedUsername = data.username || (data.email ? data.email.split('@')[0] : '');
+        if (token) localStorage.setItem('astra_access_token', token);
+        if (sessionToken) localStorage.setItem('astra_session_token', sessionToken);
         localStorage.setItem('aster_username', cachedUsername);
         localStorage.setItem('aster_user', JSON.stringify({
           id: data.id,
@@ -4378,24 +4395,31 @@
       }
     } catch (err) {
       const errMsg = (err && err.message ? err.message.toLowerCase() : '');
-      const isAuthError = (err && err.status === 401) ||
-        errMsg.includes('sign in is required') ||
-        errMsg.includes('unauthorized') ||
-        errMsg.includes('not authenticated') ||
-        errMsg.includes('invalid token') ||
-        errMsg.includes('session expired') ||
-        errMsg.includes('could not validate');
+      const isExplicitRevocation = (err && err.status === 401) &&
+        (errMsg.includes('revoked') || errMsg.includes('invalid credentials') || errMsg.includes('session expired') || errMsg.includes('sign in is required'));
 
-      if (isAuthError) {
+      // If session was explicitly revoked and no silent refresh succeeded, clear state
+      if (isExplicitRevocation && !sessionToken) {
         isAuthenticated = false;
         token = '';
+        sessionToken = '';
         user = null;
         cachedUsername = '';
+        localStorage.removeItem('astra_access_token');
+        localStorage.removeItem('astra_session_token');
         localStorage.removeItem('aster_token');
         localStorage.removeItem('aster_username');
         localStorage.removeItem('aster_user');
       } else {
-        console.warn('Temporary network issue verifying auth status, retaining cached state:', err);
+        // Resilient offline fallback: retain user state from local storage!
+        const storedUser = localStorage.getItem('aster_user');
+        if (storedUser) {
+          try {
+            user = JSON.parse(storedUser);
+            isAuthenticated = Boolean(user && user.role && user.role !== 'guest');
+          } catch (_) {}
+        }
+        console.warn('Network issue during startup session verification, retaining authenticated state:', err);
       }
     }
 
