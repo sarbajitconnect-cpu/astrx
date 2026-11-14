@@ -552,6 +552,58 @@ def privacy_page() -> FileResponse:
     return FileResponse(STATIC_DIR / "privacy.html")
 
 
+@app.get("/download", response_class=FileResponse)
+@app.get("/download.html", response_class=FileResponse)
+def download_page() -> FileResponse:
+    return FileResponse(STATIC_DIR / "download.html")
+
+
+@app.get("/download/apk")
+@app.get("/download/Astra-AI-Release.apk")
+def download_apk_file() -> Response:
+    apk_path = STATIC_DIR / "download" / "Astra-AI-Release.apk"
+    root_apk_path = BUNDLE_DIR.parent / "dist-android" / "Astra-AI-Release.apk"
+    target = apk_path if apk_path.exists() else (root_apk_path if root_apk_path.exists() else None)
+    if target and target.exists():
+        return FileResponse(
+            target,
+            media_type="application/vnd.android.package-archive",
+            filename="Astra-AI-Release.apk",
+        )
+    return RedirectResponse(
+        url="https://github.com/sarbajitconnect-cpu/astrx/raw/main/dist-android/Astra-AI-Release.apk",
+        status_code=302,
+    )
+
+
+@app.get("/download/debug")
+@app.get("/download/Astra-AI-Debug.apk")
+def download_debug_apk_file() -> Response:
+    apk_path = STATIC_DIR / "download" / "Astra-AI-Debug.apk"
+    root_apk_path = BUNDLE_DIR.parent / "dist-android" / "Astra-AI-Debug.apk"
+    target = apk_path if apk_path.exists() else (root_apk_path if root_apk_path.exists() else None)
+    if target and target.exists():
+        return FileResponse(
+            target,
+            media_type="application/vnd.android.package-archive",
+            filename="Astra-AI-Debug.apk",
+        )
+    return RedirectResponse(
+        url="https://github.com/sarbajitconnect-cpu/astrx/raw/main/dist-android/Astra-AI-Debug.apk",
+        status_code=302,
+    )
+
+
+@app.get("/astra_apk_qr.png", response_class=FileResponse)
+def qr_png() -> FileResponse:
+    return FileResponse(STATIC_DIR / "astra_apk_qr.png")
+
+
+@app.get("/astra_apk_qr.svg", response_class=FileResponse)
+def qr_svg() -> FileResponse:
+    return FileResponse(STATIC_DIR / "astra_apk_qr.svg")
+
+
 @app.get("/metrics")
 def metrics(request: Request) -> Response:
     """Internal metrics telemetry restricted to local loopback interface."""
